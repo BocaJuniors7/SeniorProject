@@ -1,7 +1,7 @@
 <template>
-  <div class="login-page">
-    <div class="login-container">
-      <div class="login-header">
+  <div class="signup-page">
+    <div class="signup-container">
+      <div class="signup-header">
         <div class="paw-icon">
           <svg viewBox="0 0 100 100" class="paw-svg">
             <!-- Main paw pad (heart-shaped) -->
@@ -13,15 +13,37 @@
             <ellipse cx="70" cy="35" rx="7" ry="10" fill="#6A2C4A"/>
           </svg>
         </div>
-        <h1>Welcome Back</h1>
-        <p>Sign in to continue your dog breeding journey</p>
+        <h1>Join PawMatch</h1>
+        <p>Create your account to start connecting with other dog breeders</p>
       </div>
 
-      <form @submit.prevent="handleLogin" class="login-form">
+      <form @submit.prevent="handleSignup" class="signup-form">
+        <div class="form-group">
+          <label for="firstName">First Name</label>
+          <input 
+            v-model="form.firstName" 
+            type="text" 
+            id="firstName" 
+            required 
+            placeholder="Enter your first name"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="lastName">Last Name</label>
+          <input 
+            v-model="form.lastName" 
+            type="text" 
+            id="lastName" 
+            required 
+            placeholder="Enter your last name"
+          />
+        </div>
+
         <div class="form-group">
           <label for="email">Email Address</label>
           <input 
-            v-model="email" 
+            v-model="form.email" 
             type="email" 
             id="email" 
             required 
@@ -32,26 +54,51 @@
         <div class="form-group">
           <label for="password">Password</label>
           <input 
-            v-model="password" 
+            v-model="form.password" 
             type="password" 
             id="password" 
             required 
-            placeholder="Enter your password"
+            placeholder="Create a password"
+            minlength="6"
           />
         </div>
 
-        <div class="form-options">
+        <div class="form-group">
+          <label for="confirmPassword">Confirm Password</label>
+          <input 
+            v-model="form.confirmPassword" 
+            type="password" 
+            id="confirmPassword" 
+            required 
+            placeholder="Confirm your password"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="userType">I am a:</label>
+          <select v-model="form.userType" id="userType" required>
+            <option value="">Select your role</option>
+            <option value="breeder">Dog Breeder</option>
+            <option value="buyer">Looking to Buy</option>
+            <option value="both">Both Breeder & Buyer</option>
+          </select>
+        </div>
+
+        <div class="form-group checkbox-group">
           <label class="checkbox-label">
-            <input v-model="rememberMe" type="checkbox" />
+            <input 
+              v-model="form.agreeToTerms" 
+              type="checkbox" 
+              required
+            />
             <span class="checkmark"></span>
-            Remember me
+            I agree to the <a href="#" class="link">Terms of Service</a> and <a href="#" class="link">Privacy Policy</a>
           </label>
-          <a href="#" class="forgot-password">Forgot password?</a>
         </div>
 
         <button type="submit" class="btn btn-primary" :disabled="isLoading">
-          <span v-if="isLoading">Signing In...</span>
-          <span v-else>Sign In</span>
+          <span v-if="isLoading">Creating Account...</span>
+          <span v-else>Create Account</span>
         </button>
 
         <div class="error-message" v-if="errorMessage">
@@ -59,7 +106,9 @@
         </div>
       </form>
 
-      <div class="login-footer">
+      <div class="signup-footer">
+        <p>Already have an account? <router-link to="/login" class="link">Sign in here</router-link></p>
+        
         <div class="divider">
           <span>Or continue with</span>
         </div>
@@ -73,34 +122,50 @@
           </svg>
           Continue with Google
         </button>
-
-        <p class="signup-link">Don't have an account? <router-link to="/signup" class="link">Sign up here</router-link></p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { signInWithGooglePopup, signInWithEmailPassword } from '../firebase'
+import { signInWithGooglePopup, createUserWithEmailPassword } from '../firebase'
 
 const router = useRouter()
-const email = ref('')
-const password = ref('')
-const rememberMe = ref(false)
 const isLoading = ref(false)
 const errorMessage = ref('')
 
-const handleLogin = async () => {
+const form = reactive({
+  firstName: '',
+  lastName: '',
+  email: '',
+  password: '',
+  confirmPassword: '',
+  userType: '',
+  agreeToTerms: false
+})
+
+const handleSignup = async () => {
+  if (form.password !== form.confirmPassword) {
+    errorMessage.value = 'Passwords do not match'
+    return
+  }
+
+  if (form.password.length < 6) {
+    errorMessage.value = 'Password must be at least 6 characters'
+    return
+  }
+
   isLoading.value = true
   errorMessage.value = ''
 
   try {
-    await signInWithEmailPassword(email.value, password.value)
+    await createUserWithEmailPassword(form.email, form.password)
+    // User will be automatically redirected by the auth guard
     router.push('/discover')
   } catch (error) {
-    errorMessage.value = error.message || 'Failed to sign in'
+    errorMessage.value = error.message || 'Failed to create account'
   } finally {
     isLoading.value = false
   }
@@ -117,7 +182,7 @@ const signInWithGoogle = async () => {
 </script>
 
 <style scoped>
-.login-page {
+.signup-page {
   min-height: 100vh;
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   display: flex;
@@ -126,17 +191,17 @@ const signInWithGoogle = async () => {
   padding: 2rem;
 }
 
-.login-container {
+.signup-container {
   background: white;
   border-radius: 20px;
   box-shadow: 0 20px 40px rgba(0,0,0,0.1);
   padding: 3rem;
   width: 100%;
-  max-width: 450px;
+  max-width: 500px;
   border: 2px solid #66B3FF;
 }
 
-.login-header {
+.signup-header {
   text-align: center;
   margin-bottom: 2rem;
 }
@@ -151,18 +216,18 @@ const signInWithGoogle = async () => {
   filter: drop-shadow(0 4px 8px rgba(0,0,0,0.2));
 }
 
-.login-header h1 {
+.signup-header h1 {
   font-size: 2rem;
   color: #333;
   margin-bottom: 0.5rem;
 }
 
-.login-header p {
+.signup-header p {
   color: #666;
   font-size: 1rem;
 }
 
-.login-form {
+.signup-form {
   margin-bottom: 2rem;
 }
 
@@ -177,7 +242,8 @@ const signInWithGoogle = async () => {
   color: #333;
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
   width: 100%;
   padding: 1rem;
   border: 2px solid #e9ecef;
@@ -187,41 +253,29 @@ const signInWithGoogle = async () => {
   box-sizing: border-box;
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
   outline: none;
   border-color: #6A2C4A;
 }
 
-.form-options {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.checkbox-group {
   margin-bottom: 2rem;
 }
 
 .checkbox-label {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  align-items: flex-start;
+  gap: 0.75rem;
   cursor: pointer;
   font-size: 0.9rem;
+  line-height: 1.4;
 }
 
 .checkbox-label input[type="checkbox"] {
   width: auto;
   margin: 0;
   transform: scale(1.2);
-}
-
-.forgot-password {
-  color: #6A2C4A;
-  text-decoration: none;
-  font-size: 0.9rem;
-  font-weight: 500;
-}
-
-.forgot-password:hover {
-  text-decoration: underline;
 }
 
 .btn {
@@ -259,7 +313,6 @@ const signInWithGoogle = async () => {
   background: white;
   color: #333;
   border: 2px solid #e9ecef;
-  margin-bottom: 1.5rem;
 }
 
 .btn-google:hover {
@@ -281,8 +334,23 @@ const signInWithGoogle = async () => {
   border: 1px solid #fcc;
 }
 
-.login-footer {
+.signup-footer {
   text-align: center;
+}
+
+.signup-footer p {
+  margin-bottom: 1.5rem;
+  color: #666;
+}
+
+.link {
+  color: #6A2C4A;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.link:hover {
+  text-decoration: underline;
 }
 
 .divider {
@@ -308,38 +376,17 @@ const signInWithGoogle = async () => {
   font-size: 0.9rem;
 }
 
-.signup-link {
-  color: #666;
-  font-size: 0.9rem;
-}
-
-.link {
-  color: #6A2C4A;
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.link:hover {
-  text-decoration: underline;
-}
-
 @media (max-width: 768px) {
-  .login-page {
+  .signup-page {
     padding: 1rem;
   }
   
-  .login-container {
+  .signup-container {
     padding: 2rem;
   }
   
-  .login-header h1 {
+  .signup-header h1 {
     font-size: 1.5rem;
-  }
-  
-  .form-options {
-    flex-direction: column;
-    gap: 1rem;
-    align-items: flex-start;
   }
 }
 </style>
