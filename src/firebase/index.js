@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app'
 import {
   getAuth, onAuthStateChanged,
   GoogleAuthProvider, signInWithPopup,
-  signInWithEmailAndPassword, signOut
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut
 } from 'firebase/auth'
 import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore'
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage'
@@ -54,6 +54,9 @@ export async function signInWithGooglePopup() {
 }
 export async function signInWithEmailPassword(email, password) {
   await signInWithEmailAndPassword(auth, email, password)
+}
+export async function createUserWithEmailPassword(email, password) {
+  await createUserWithEmailAndPassword(auth, email, password)
 }
 export async function signOutFirebase() {
   await signOut(auth)
