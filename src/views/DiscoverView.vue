@@ -338,24 +338,47 @@ const passDog = () => {
   }
 }
 
+// ----- Simple demo persistence for matches (no Firebase) -----
+const MATCHES_KEY = 'demo_matches'
+
+function loadStoredMatches() {
+  try {
+    return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]')
+  } catch {
+    return []
+  }
+}
+
+function saveStoredMatches(arr) {
+  localStorage.setItem(MATCHES_KEY, JSON.stringify(arr))
+}
+
+function addMatchToStorage(dog) {
+  const existing = loadStoredMatches()
+  if (!existing.some(m => m.id === dog.id)) {
+    existing.unshift({ ...dog, matchedAt: Date.now() })
+    saveStoredMatches(existing)
+    // Let other pages (MatchesView) know
+    window.dispatchEvent(new Event('matches-updated'))
+  }
+}
+
 const likeDog = () => {
   if (dogs.value.length > 0) {
     const likedDog = dogs.value.shift()
     console.log('Liked dog:', likedDog)
-    
-    // Check if this is a match (Golden Retriever + opposite sex + similar age)
+
     const isMatch = checkForMatch(likedDog)
-    
+
     if (isMatch) {
       matches.value.push(likedDog)
+      addMatchToStorage(likedDog) // ← NEW: persist the match
       matchedDog.value = likedDog
       showMatchAnimation.value = true
-      
-      // Hide animation after 3 seconds and show chat
+
       setTimeout(() => {
         showMatchAnimation.value = false
         showChat.value = true
-        // Add initial chat messages
         chatMessages.value = [
           {
             id: 1,
@@ -372,10 +395,9 @@ const likeDog = () => {
         ]
       }, 3000)
     }
-    
-    // In a real app, this would save the like to the database
   }
 }
+
 
 const checkForMatch = (dog) => {
   // Tango is a 3-year-old male Golden Retriever
