@@ -29,7 +29,7 @@
           <p class="owner" v-if="m.ownerName">Owner: {{ m.ownerName }}</p>
 
           <div class="actions">
-            <button class="btn" @click="goDiscover">Message</button>
+            <button class="btn" @click="router.push({ name: 'messages' })">Message</button>
             <button class="btn outline" @click="viewProfile(m)">View Profile</button>
           </div>
 
@@ -45,6 +45,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+
 
 // Keep the same key as DiscoverView
 const MATCHES_KEY = 'demo_matches'

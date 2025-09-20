@@ -25,6 +25,8 @@
           <router-link to="/discover" class="nav-link">Discover</router-link>
           <router-link to="/profile" class="nav-link">Profile</router-link>
           <router-link to="/matches" class="nav-link">Matches</router-link>
+          <router-link to="/messages" class="nav-link">Messages</router-link>
+
         </template>
         <template v-else>
           <router-link to="/" class="nav-link">Home</router-link>

@@ -6,6 +6,7 @@ import DiscoverView from '../views/DiscoverView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import MatchesView from '../views/MatchesView.vue' // ← add this
+import MessagesView from '../views/MessagesView.vue'
 
 import { authReady, getCurrentUser } from '../firebase'
 
@@ -16,7 +17,8 @@ const routes = [
   { path: '/discover', name: 'discover', component: DiscoverView, meta: { requiresAuth: true } },
   { path: '/profile', name: 'profile', component: ProfileView, meta: { requiresAuth: true } },
   { path: '/dashboard', name: 'dashboard', component: DashboardView, meta: { requiresAuth: true } },
-  { path: '/matches', name: 'matches', component: MatchesView, meta: { requiresAuth: true} }
+  { path: '/matches', name: 'matches', component: MatchesView, meta: { requiresAuth: true} },
+  { path: '/messages', name: 'messages', component: MessagesView, meta: { requiresAuth: true}},
 ]
 
 const router = createRouter({
