@@ -50,6 +50,14 @@
       <button @click="applyFilters" class="apply-filters-btn">Apply Filters</button>
     </div>
 
+    <!-- Loading State -->
+    <div v-if="isFiltering" class="filtering-overlay">
+      <div class="filtering-content">
+        <div class="filtering-spinner">🐾</div>
+        <p>Finding dogs near you...</p>
+      </div>
+    </div>
+
     <!-- Dog Cards Stack -->
     <div class="cards-container">
       <div v-if="dogs.length === 0" class="no-dogs">
@@ -196,6 +204,14 @@
         </div>
       </div>
     </div>
+
+    <!-- Filtering Overlay -->
+    <div v-if="isFiltering" class="filtering-overlay">
+      <div class="filtering-content">
+        <div class="filtering-spinner">🐾</div>
+        <p>Finding dogs near you...</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -216,6 +232,8 @@ const matchedDog = ref(null)
 const showChat = ref(false)
 const chatMessages = ref([])
 const newMessage = ref('')
+const isFiltering = ref(false);
+const filterError = ref('');
 
 // Touch/Mouse handling
 const isDragging = ref(false)
@@ -318,10 +336,115 @@ const toggleMenu = () => {
   showMenu.value = !showMenu.value
 }
 
-const applyFilters = () => {
-  // In a real app, this would filter the dogs from the database
-  console.log('Applying filters:', filters)
-  showFilters.value = false
+const geocodeAddress = async (address) => {
+  try {
+    const response = await fetch(
+      // address field works as both a city, state, and also just a full address. examples like san jose, ca work just fine. 
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`,
+      {
+        headers: {
+          'User-Agent': 'PawMatch App' // nominatim requires a user-agent header
+        }
+      }
+    );
+    const data = await response.json();
+    
+    if (data && data[0]) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon)
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    return null;
+  }
+}
+
+const calculateDistance = (userLocation, dogLocation) => {
+  const earthRadiusMiles = 3963.19; // earths radius in miles
+  
+  // convert latitude and longitude from degrees to radians
+  const lat1Rad = userLocation.lat * Math.PI/180;
+  const lat2Rad = dogLocation.lat * Math.PI/180;
+  const latDiffRad = (dogLocation.lat-userLocation.lat) * Math.PI/180;
+  const lonDiffRad = (dogLocation.lng-userLocation.lng) * Math.PI/180;
+
+  // haversine formula
+  const squareHalfChordLength = Math.sin(latDiffRad/2) * Math.sin(latDiffRad/2) +
+                               Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+                               Math.sin(lonDiffRad/2) * Math.sin(lonDiffRad/2);
+  
+  const angularDistance = 2 * Math.atan2(
+    Math.sqrt(squareHalfChordLength), 
+    Math.sqrt(1-squareHalfChordLength)
+  );
+  
+  // distance in miles
+  const distanceMiles = earthRadiusMiles * angularDistance;
+  
+  return Math.round(distanceMiles * 10) / 10; // nearest tenth of a mile
+}
+
+const applyFilters = async () => {
+  isFiltering.value = true;
+  let filteredDogs = [...sampleDogs];
+
+  try {
+    if (filters.breed) {
+      filteredDogs = filteredDogs.filter(dog => 
+        dog.breed.toLowerCase() === filters.breed.toLowerCase()
+      );
+    }
+
+    if (filters.minAge) {
+      filteredDogs = filteredDogs.filter(dog => dog.age >= filters.minAge);
+    }
+    if (filters.maxAge) {
+      filteredDogs = filteredDogs.filter(dog => dog.age <= filters.maxAge);
+    }
+
+    // apply distance filter if selected
+    if (filters.distance) {
+      const maxDistance = Number(filters.distance);
+      
+      // get users location first
+      const userLocation = await geocodeAddress("San Francisco, CA"); // nn real app, get users actual location
+      
+      if (!userLocation) {
+        throw new Error("Couldn't determine user's location");
+      }
+
+      const filteredWithDistance = [];
+      
+      // process one dog at a time to properly fill queue
+      for (const dog of filteredDogs) {
+        const dogLocation = await geocodeAddress(dog.location);
+        if (dogLocation) {
+          const distance = calculateDistance(userLocation, dogLocation);
+          if (distance <= maxDistance) {
+            filteredWithDistance.push({
+              ...dog,
+              distanceFromUser: distance
+            });
+          }
+        }
+        // wait 1 second before next request
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      filteredDogs = filteredWithDistance;
+    }
+
+    // update the dogs queue with filtered results
+    dogs.value = filteredDogs;
+  } catch (error) {
+    console.error('Error applying filters:', error);
+  } finally {
+    showFilters.value = false;
+    isFiltering.value = false;
+  }
 }
 
 const resetFilters = () => {
@@ -1267,6 +1390,36 @@ const formatTime = (timestamp) => {
   }
 }
 
+/* Loading State */
+.filtering-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(106, 44, 74, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.filtering-content {
+  text-align: center;
+  color: white;
+}
+
+.filtering-spinner {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Desktop and larger screens */
 @media (min-width: 769px) {
   .dog-card {
@@ -1301,5 +1454,29 @@ const formatTime = (timestamp) => {
     width: 300px;
     height: 300px;
   }
+}
+
+/* Filtering Overlay */
+.filtering-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.filtering-content {
+  text-align: center;
+  color: #333;
+}
+
+.filtering-spinner {
+  font-size: 3rem;
+  margin-bottom: 1rem;
 }
 </style>
