@@ -4,12 +4,17 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
     function isOwner(ownerId) { return isSignedIn() && request.auth.uid == ownerId; }
 
+    // --- users: owner writes, choose if reads are public or signed-in ---
     match /users/{uid} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      // If you want public browsing of profiles, use `if true;`
+      // If you only want signed-in users to browse, keep isSignedIn()
+      allow read: if true;  // <- change to isSignedIn() if you prefer
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isOwner(resource.data.uid);
     }
 
+    // --- dogs: enforce owner + schema together ---
     match /dogs/{dogId} {
       allow read: if true;
       allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
@@ -20,18 +25,23 @@ service cloud.firestore {
         (request.resource.data.sex in ["M","F"]);
     }
 
+
+    // --- likes: combine all constraints in ONE line ---
     match /likes/{likeId} {
       allow read: if isSignedIn();
-      // owner of the "from" dog is the liker
-      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+
+      // liker must be signed in + owner; forbid self-like
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.fromDogOwnerId != request.resource.data.toDogOwnerId;
+
       allow delete: if isOwner(resource.data.ownerId);
-      // block self-like (client must provide fromDogOwnerId/toDogOwnerId)
-      allow create: if request.resource.data.fromDogOwnerId != request.resource.data.toDogOwnerId;
     }
 
+    // --- matches: server-only is fine ---
     match /matches/{matchId} {
       allow read: if isSignedIn();
-      allow create, update, delete: if false; // only server (Functions/admin) creates
+      allow create, update, delete: if false;
     }
   }
 }
