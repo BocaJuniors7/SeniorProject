@@ -361,15 +361,26 @@ const applyFilters = async () => {
 
     if (filters.distance) {
       const maxDistance = Number(filters.distance)
-      const userLocation = await geocodeAddress('San Francisco, CA') // TODO: replace with actual user location
+      const userLocation = await geocodeAddress('Lakeland, FL') // TODO: replace with actual user location
       if (!userLocation) throw new Error("Couldn't determine user's location")
 
       const out = []
       for (const dog of filteredDogs) {
         let dogLoc = dog.coords
-        if (!dogLoc && dog.location) {
-          dogLoc = await geocodeAddress(dog.location)
-          await new Promise(r => setTimeout(r, 1000)) // rate-limit friendly
+        console.log("before geocoding")
+        console.log(dogLoc)
+        // check if dog has stored coords, else geocode their address
+        // lat lng should be calculated NOT here but this is a fallback for demo purposes
+          if(dogLoc && dogLoc.lat && dogLoc.lng) {
+            continue
+          } else {
+          if (!dogLoc && dog.location) {
+            dogLoc = await geocodeAddress(dog.location)
+            await new Promise(r => setTimeout(r, 1000)) // rate-limit friendly
+            console.log("after geocoding")
+            console.log(dogLoc)
+            //update their lat lng in firestore here for now, update method later. This is to save time in demo period. 
+          }
         }
         if (!dogLoc) continue
         const dist = calculateDistance(userLocation, dogLoc)
