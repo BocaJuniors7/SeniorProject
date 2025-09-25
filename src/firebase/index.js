@@ -13,7 +13,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyCSSdg8BPd7qH1skZ1jmJmmdNTMsmuFdzc",
   authDomain: "senior-project-pawmatch.firebaseapp.com",
   projectId: "senior-project-pawmatch",
-  storageBucket: "senior-project-pawmatch.appspot.com",   // ← fixed
+  storageBucket: "senior-project-pawmatch.firebasestorage.app",   // ← fixed
   messagingSenderId: "258128305500",
   appId: "1:258128305500:web:9b8277391cd1c2988b3599",
 }

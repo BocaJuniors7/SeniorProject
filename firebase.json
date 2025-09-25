@@ -1,0 +1,22 @@
+{
+  "hosting": {
+    "site": "senior-project-pawmatch",
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      { "source": "**", "destination": "/index.html" }
+    ]
+  },
+  "storage": {
+    "rules": "firebase/storage.rules"
+  },
+  "firestore": {
+    "rules": "firebase/firestore.rules"
+  }
+}
+
+
