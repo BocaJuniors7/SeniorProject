@@ -231,97 +231,150 @@ const filters = reactive({
   distance: '25'
 })
 
-// Sample dog data (in real app, this would come from Firebase)
-// These dogs are designed to match with Tango (Golden Retriever, Male, 3 years)
-const sampleDogs = [
-  {
-    id: 1,
-    name: 'Bella',
-    age: 3,
-    breed: 'Golden Retriever',
-    sex: 'Female',
-    weight: 65,
-    location: 'San Francisco, CA',
-    temperament: 'Friendly, Energetic',
-    healthCertified: true,
-    image: 'https://images.unsplash.com/photo-1552053831-71594a27632d?w=400&h=600&fit=crop',
-    ownerId: 'user1',
-    ownerName: 'Sarah Johnson'
-  },
-  {
-    id: 2,
-    name: 'Luna',
-    age: 2,
-    breed: 'Golden Retriever',
-    sex: 'Female',
-    weight: 58,
-    location: 'Oakland, CA',
-    temperament: 'Gentle, Intelligent',
-    healthCertified: true,
-    image: 'https://images.unsplash.com/photo-1547407139-3c921a71905c?w=400&h=600&fit=crop',
-    ownerId: 'user2',
-    ownerName: 'Mike Chen'
-  },
-  {
-    id: 3,
-    name: 'Max',
-    age: 4,
-    breed: 'Labrador',
-    sex: 'Male',
-    weight: 75,
-    location: 'Berkeley, CA',
-    temperament: 'Playful, Loyal',
-    healthCertified: true,
-    image: 'https://images.unsplash.com/photo-1583337130417-3346a1be7dee?w=400&h=600&fit=crop',
-    ownerId: 'user3',
-    ownerName: 'Emily Davis'
-  },
-  {
-    id: 4,
-    name: 'Ruby',
-    age: 3,
-    breed: 'Golden Retriever',
-    sex: 'Female',
-    weight: 62,
-    location: 'San Jose, CA',
-    temperament: 'Calm, Affectionate',
-    healthCertified: true,
-    image: 'https://images.unsplash.com/photo-1601758228041-f3b2795255f1?w=400&h=600&fit=crop',
-    ownerId: 'user4',
-    ownerName: 'David Wilson'
-  },
-  {
-    id: 5,
-    name: 'Charlie',
-    age: 2,
-    breed: 'German Shepherd',
-    sex: 'Male',
-    weight: 70,
-    location: 'Fremont, CA',
-    temperament: 'Intelligent, Protective',
-    healthCertified: false,
-    image: 'https://images.unsplash.com/photo-1551717743-49959800b1f6?w=400&h=600&fit=crop',
-    ownerId: 'user5',
-    ownerName: 'Lisa Rodriguez'
+onMounted(loadDogs)
+
+// UI helpers
+const toggleFilters = () => { showFilters.value = !showFilters.value }
+const toggleMenu = () => { showMenu.value = !showMenu.value }
+
+// --- Geocoding & distance (fallback if no stored coords) ---
+const geocodeAddress = async (address) => {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1`,
+      { headers: { 'User-Agent': 'PawMatch App' } }
+    )
+    const data = await response.json()
+    if (data && data[0]) {
+      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) }
+    }
+    return null
+  } catch (error) {
+    console.error('Geocoding error:', error)
+    return null
   }
-]
-
-onMounted(() => {
-  dogs.value = [...sampleDogs]
-})
-
-const toggleFilters = () => {
-  showFilters.value = !showFilters.value
 }
 
-const toggleMenu = () => {
-  showMenu.value = !showMenu.value
+const calculateDistance = (userLocation, dogLocation) => {
+  const earthRadiusMiles = 3963.19; // Earth's radius in miles
+
+  // convert degrees to radians
+  const lat1Rad = userLocation.lat * Math.PI / 180;
+  const lat2Rad = dogLocation.lat * Math.PI / 180;
+  const latDiffRad = (dogLocation.lat - userLocation.lat) * Math.PI / 180;
+  const lonDiffRad = (dogLocation.lng - userLocation.lng) * Math.PI / 180;
+
+  // haversine formula
+  const squareHalfChordLength =
+    Math.sin(latDiffRad / 2) * Math.sin(latDiffRad / 2) +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+    Math.sin(lonDiffRad / 2) * Math.sin(lonDiffRad / 2);
+
+  const angularDistance = 2 * Math.atan2(
+    Math.sqrt(squareHalfChordLength),
+    Math.sqrt(1 - squareHalfChordLength)
+  );
+
+  const distanceMiles = earthRadiusMiles * angularDistance;
+
+  return Math.round(distanceMiles * 10) / 10; // nearest tenth of a mile
+};
+
+
+// --- Firestore mapping & loading ---
+function mapDogDocToCard(d) {
+  const firstPhoto = (d.photos?.[0]?.url) || ''
+  const ageYears = d.age ?? (d.birthdate ? Math.max(0, Math.floor((Date.now() - new Date(d.birthdate)) / (365.25*24*3600*1000))) : '')
+  return {
+    id: d.id || d._id || d.docId || (d.ownerId + ':' + (d.name || Math.random())),
+    name: d.name || 'Unnamed',
+    age: ageYears,
+    breed: d.breed || '',
+    sex: d.sex || '',
+    weight: d.weight || '',
+    location: d.ownerLocation || d.location || '',
+    temperament: d.temperament || '',
+    healthCertified: !!d.healthCertified,
+    image: firstPhoto,
+    ownerId: d.ownerId,
+    ownerName: d.ownerName || 'Owner',
+    coords: d.coords || null,
+  }
 }
 
-const applyFilters = () => {
-  // In a real app, this would filter the dogs from the database
-  console.log('Applying filters:', filters)
-  showFilters.value = false
+async function loadDogs() {
+  isFiltering.value = true
+  try {
+    const docs = await listDogs({ onlyWithPhotos: false, max: 50, breed: filters.breed || undefined })
+    dogs.value = docs.map(mapDogDocToCard)
+  } catch (e) {
+    console.error(e)
+    filterError.value = 'Failed to load dogs'
+  } finally {
+    isFiltering.value = false
+  }
+}
+
+// --- Filters ---
+const applyFilters = async () => {
+  isFiltering.value = true
+  // pull fresh batch with coarse Firestore filtering first
+  const base = await listDogs({
+    breed: filters.breed || undefined,
+    onlyWithPhotos: false,
+    max: 60
+  })
+  let filteredDogs = base.map(mapDogDocToCard)
+
+  try {
+    if (filters.breed) {
+      const b = filters.breed.toLowerCase()
+      filteredDogs = filteredDogs.filter(dog => dog.breed?.toLowerCase() === b)
+    }
+    if (filters.minAge) {
+      filteredDogs = filteredDogs.filter(dog => Number(dog.age) >= Number(filters.minAge))
+    }
+    if (filters.maxAge) {
+      filteredDogs = filteredDogs.filter(dog => Number(dog.age) <= Number(filters.maxAge))
+    }
+
+    if (filters.distance) {
+      const maxDistance = Number(filters.distance)
+      const userLocation = await geocodeAddress('Lakeland, FL') // TODO: replace with actual user location
+      if (!userLocation) throw new Error("Couldn't determine user's location")
+
+      const out = []
+      for (const dog of filteredDogs) {
+        let dogLoc = dog.coords
+        console.log("before geocoding")
+        console.log(dogLoc)
+        // check if dog has stored coords, else geocode their address
+        // lat lng should be calculated NOT here but this is a fallback for demo purposes
+          if(dogLoc && dogLoc.lat && dogLoc.lng) {
+            continue
+          } else {
+          if (!dogLoc && dog.location) {
+            dogLoc = await geocodeAddress(dog.location)
+            await new Promise(r => setTimeout(r, 1000)) // rate-limit friendly
+            console.log("after geocoding")
+            console.log(dogLoc)
+            //update their lat lng in firestore here for now, update method later. This is to save time in demo period. 
+          }
+        }
+        if (!dogLoc) continue
+        const dist = calculateDistance(userLocation, dogLoc)
+        if (dist <= maxDistance) out.push({ ...dog, distanceFromUser: dist })
+      }
+      filteredDogs = out
+    }
+
+    dogs.value = filteredDogs
+  } catch (error) {
+    console.error('Error applying filters:', error)
+  } finally {
+    showFilters.value = false
+    isFiltering.value = false
+  }
 }
 
 const resetFilters = () => {
