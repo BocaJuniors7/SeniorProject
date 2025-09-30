@@ -1,0 +1,71 @@
+Here are the changes you need to make to your ProfileView.vue:
+
+1. ADD IMPORT (after line 365):
+import ProfilePreview from '../components/ProfilePreview.vue'
+
+2. ADD PREVIEW STATE (after line 381):
+const showPreview = ref(false)
+
+3. ADD PREVIEW BUTTON (replace the header-actions section around line 6-15):
+<div class="header-actions">
+  <button class="preview-btn" @click="showPreview = true" :disabled="!currentUser || !dogProfile.name">
+    Preview Profile
+  </button>
+  <button class="save-all-btn" @click="saveProfile" :disabled="saving || !currentUser">
+    {{ saving ? 'Saving…' : 'Save Changes' }}
+  </button>
+  <button @click="toggleMenu" class="menu-btn" aria-label="Open menu">
+    <svg class="menu-icon" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
+    </svg>
+  </button>
+</div>
+
+4. ADD PREVIEW COMPONENT (before the closing </div> of the main template, around line 350):
+<!-- Profile Preview Modal -->
+<ProfilePreview
+  v-if="showPreview"
+  :profile="dogProfile"
+  :photos="photos"
+  @close="showPreview = false"
+  @edit="showPreview = false; setActiveTab('basic')"
+  @like="handleLike"
+  @pass="handlePass"
+/>
+
+5. ADD PREVIEW HANDLERS (after the existing functions, around line 590):
+const handleLike = () => {
+  console.log('Profile liked!')
+  showPreview.value = false
+}
+
+const handlePass = () => {
+  console.log('Profile passed!')
+  showPreview.value = false
+}
+
+6. ADD PREVIEW BUTTON STYLES (add to the <style> section):
+.preview-btn {
+  background: #6A2C4A;
+  color: white;
+  border: none;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-right: 0.5rem;
+}
+
+.preview-btn:hover:enabled {
+  background: #5a2438;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 10px rgba(106, 44, 74, 0.3);
+}
+
+.preview-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}

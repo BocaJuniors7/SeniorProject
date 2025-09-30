@@ -4,6 +4,13 @@
     <header class="discover-header">
       <h1>Discover Dogs</h1>
       <div class="header-actions">
+        <button @click="generateAIDogProfiles" class="generate-btn" :disabled="isGenerating">
+          <svg class="generate-icon" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/>
+          </svg>
+          <span v-if="!isGenerating">Generate AI Dogs</span>
+          <span v-else>Generating...</span>
+        </button>
         <button @click="toggleFilters" class="filter-btn">
           <svg class="filter-icon" viewBox="0 0 24 24">
             <path fill="currentColor" d="M3 17h18v-2H3v2zm0-5h18V7H3v5zm0-7v2h18V5H3z"/>
@@ -91,21 +98,77 @@
         </div>
         
         <div class="card-details">
-          <div class="detail-row">
-            <span class="label">Sex:</span>
-            <span class="value">{{ dog.sex }}</span>
+          <!-- Basic Info Section -->
+          <div class="info-section">
+            <div class="detail-row">
+              <span class="label">Sex:</span>
+              <span class="value">{{ dog.sex }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="label">Weight:</span>
+              <span class="value">{{ dog.weight }} lbs</span>
+            </div>
           </div>
-          <div class="detail-row">
-            <span class="label">Weight:</span>
-            <span class="value">{{ dog.weight }} lbs</span>
+
+          <!-- About Section -->
+          <div v-if="dog.temperament" class="content-section">
+            <h4>About {{ dog.name }}</h4>
+            <p class="temperament">{{ dog.temperament }}</p>
           </div>
-          <div class="detail-row">
-            <span class="label">Temperament:</span>
-            <span class="value">{{ dog.temperament }}</span>
+
+          <!-- Training & Certifications Section -->
+          <div v-if="hasTrainingInfo(dog)" class="content-section">
+            <h4>Training & Certifications</h4>
+            <div v-if="dog.trainingLevel" class="training-level">
+              <span class="label">Training Level:</span>
+              <span class="value">{{ dog.trainingLevel }}</span>
+            </div>
+            <div v-if="dog.certifications && dog.certifications.length > 0" class="certifications">
+              <span class="label">Certifications:</span>
+              <div class="cert-badges">
+                <span v-for="cert in dog.certifications" :key="cert" class="cert-badge">
+                  {{ certDisplay(cert) }}
+                </span>
+              </div>
+            </div>
+            <div v-if="dog.trainingNotes" class="training-notes">
+              <p>{{ dog.trainingNotes }}</p>
+            </div>
           </div>
-          <div class="detail-row" v-if="dog.healthCertified">
-            <span class="label">Health:</span>
-            <span class="value certified">✓ Certified</span>
+
+          <!-- Medical Papers Section -->
+          <div v-if="dog.medicalPapers && dog.medicalPapers.length > 0" class="content-section">
+            <h4>Health Certifications</h4>
+            <div class="medical-papers">
+              <div v-for="(paper, index) in dog.medicalPapers" :key="index" class="paper-item">
+                <div class="paper-icon">📄</div>
+                <div class="paper-info">
+                  <span class="paper-name">{{ paper.name || 'Health Certificate' }}</span>
+                  <span class="paper-date">{{ paper.date || 'Date not specified' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Preferences Section -->
+          <div v-if="hasPreferences(dog)" class="content-section">
+            <h4>Breeding Preferences</h4>
+            <div v-if="dog.lookingFor" class="preference-item">
+              <span class="label">Looking for:</span>
+              <span class="value">{{ dog.lookingFor }}</span>
+            </div>
+            <div v-if="dog.preferredBreeds" class="preference-item">
+              <span class="label">Preferred breeds:</span>
+              <span class="value">{{ dog.preferredBreeds }}</span>
+            </div>
+            <div v-if="dog.minAgePref || dog.maxAgePref" class="preference-item">
+              <span class="label">Age preference:</span>
+              <span class="value">{{ agePreferenceDisplay(dog) }}</span>
+            </div>
+            <div v-if="dog.travelDistance" class="preference-item">
+              <span class="label">Willing to travel:</span>
+              <span class="value">{{ dog.travelDistance }} miles</span>
+            </div>
           </div>
         </div>
       </div>
@@ -220,6 +283,9 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
 import { createLike } from '../services/likes'
+import { generateMultipleAIDogProfiles } from '../services/aiProfileGenerator'
+import { doc, setDoc, collection } from 'firebase/firestore'
+import { db } from '../lib/firebase'
 
 
 const router = useRouter()
@@ -237,6 +303,7 @@ const chatMessages = ref([])
 const newMessage = ref('')
 const isFiltering = ref(false)
 const filterError = ref('')
+const isGenerating = ref(false)
 
 // Touch/Mouse handling
 const isDragging = ref(false)
@@ -253,6 +320,42 @@ const filters = reactive({
 })
 
 onMounted(loadDogs)
+
+// Helper functions for profile display (defined early for template access)
+const certDisplay = (cert) => {
+  const certMap = {
+    'akc': 'AKC Registered',
+    'therapy': 'Therapy Dog Certified',
+    'service': 'Service Dog Trained',
+    'cpr': 'CPR Certified',
+    'obedience': 'Obedience Trained'
+  }
+  return certMap[cert.toLowerCase()] || cert
+}
+
+const hasTrainingInfo = (dog) => {
+  return dog.trainingLevel || 
+         (dog.certifications && dog.certifications.length > 0) ||
+         dog.trainingNotes
+}
+
+const hasPreferences = (dog) => {
+  return dog.lookingFor ||
+         dog.preferredBreeds ||
+         dog.minAgePref ||
+         dog.maxAgePref ||
+         dog.travelDistance
+}
+
+const agePreferenceDisplay = (dog) => {
+  const min = dog.minAgePref
+  const max = dog.maxAgePref
+  if (!min && !max) return 'No preference'
+  if (min && max) return `${min}-${max} years`
+  if (min) return `${min}+ years`
+  if (max) return `Up to ${max} years`
+  return 'Not specified'
+}
 
 // UI helpers
 const toggleFilters = () => { showFilters.value = !showFilters.value }
@@ -312,7 +415,7 @@ function mapDogDocToCard(d) {
     age: ageYears,
     breed: d.breed || '',
     sex: d.sex || '',
-    weight: d.weight || '',
+    weight: d.weight || d.weightValue || '',
     location: d.ownerLocation || d.location || '',
     temperament: d.temperament || '',
     healthCertified: !!d.healthCertified,
@@ -320,6 +423,17 @@ function mapDogDocToCard(d) {
     ownerId: d.ownerId,
     ownerName: d.ownerName || 'Owner',
     coords: d.coords || null,
+    // Additional profile data
+    trainingLevel: d.trainingLevel || '',
+    certifications: d.certifications || [],
+    trainingNotes: d.trainingNotes || '',
+    lookingFor: d.lookingFor || '',
+    preferredBreeds: d.preferredBreeds || '',
+    minAgePref: d.minAgePref || '',
+    maxAgePref: d.maxAgePref || '',
+    travelDistance: d.travelDistance || '',
+    medicalPapers: d.medicalPapers || [],
+    photos: d.photos || []
   }
 }
 
@@ -508,6 +622,48 @@ const getRandomResponse = () => {
 
 const closeChat = () => { showChat.value = false; matchedDog.value = null; chatMessages.value = [] }
 const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+// AI Profile Generation
+const generateAIDogProfiles = async () => {
+  if (isGenerating.value) return
+  
+  isGenerating.value = true
+  try {
+    console.log('Generating 5 AI dog profiles...')
+    const aiProfiles = await generateMultipleAIDogProfiles(5)
+    
+    // Save each profile to Firestore
+    for (const profile of aiProfiles) {
+      try {
+        // Create a new document with auto-generated ID
+        const newDogRef = doc(collection(db, 'dogs'))
+        const profileWithId = {
+          ...profile,
+          ownerId: 'ai_generator', // Special owner ID for AI-generated profiles
+          ownerName: 'AI Generated',
+          createdAt: new Date().toISOString(),
+          id: newDogRef.id
+        }
+        
+        await setDoc(newDogRef, profileWithId)
+        console.log(`Saved AI profile: ${profile.name} (${profile.breed})`)
+      } catch (error) {
+        console.error('Error saving AI profile:', error)
+      }
+    }
+    
+    // Refresh the dog list to show new profiles
+    await loadDogs()
+    
+    alert(`Successfully generated and added ${aiProfiles.length} new AI dog profiles!`)
+    
+  } catch (error) {
+    console.error('Error generating AI profiles:', error)
+    alert('Failed to generate AI profiles. Please try again.')
+  } finally {
+    isGenerating.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -531,10 +687,35 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 }
 
 .discover-header h1 { font-size: 1.5rem; margin: 0; }
-.header-actions { display: flex; gap: 1rem; }
+.header-actions { display: flex; gap: 1rem; align-items: center; }
 .filter-btn, .menu-btn { background: none; border: none; color: white; cursor: pointer; padding: 0.5rem; border-radius: 50%; transition: background-color 0.3s ease; }
 .filter-btn:hover, .menu-btn:hover { background: rgba(255, 255, 255, 0.1); }
 .filter-icon, .menu-icon { width: 24px; height: 24px; }
+
+.generate-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.generate-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+.generate-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+.generate-icon { width: 18px; height: 18px; }
 
 .filters-panel { background: white; padding: 1.5rem; border-bottom: 1px solid #e9ecef; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
 .filter-group { margin-bottom: 1rem; }
@@ -559,6 +740,34 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 .label { font-weight: 600; color: #666; }
 .value { color: #333; }
 .value.certified { color: #28a745; font-weight: 600; }
+
+/* New profile sections */
+.info-section { margin-bottom: 1rem; }
+.content-section { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #f0f0f0; }
+.content-section:last-child { border-bottom: none; }
+.content-section h4 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; color: #333; }
+.temperament { margin: 0; line-height: 1.4; color: #555; font-size: 0.9rem; }
+
+/* Training section */
+.training-level, .certifications, .training-notes { margin-bottom: 0.75rem; }
+.training-level:last-child, .certifications:last-child, .training-notes:last-child { margin-bottom: 0; }
+.cert-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.cert-badge { background: #6A2C4A; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 500; }
+.training-notes p { margin: 0; line-height: 1.4; color: #555; font-size: 0.85rem; }
+
+/* Medical papers */
+.medical-papers { display: flex; flex-direction: column; gap: 0.5rem; }
+.paper-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
+.paper-icon { font-size: 1.2rem; }
+.paper-info { display: flex; flex-direction: column; gap: 0.1rem; }
+.paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
+.paper-date { font-size: 0.7rem; color: #666; }
+
+/* Preferences */
+.preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.preference-item:last-child { margin-bottom: 0; }
+.preference-item .label { font-size: 0.8rem; }
+.preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
 .no-dogs { text-align: center; color: #666; }
 .no-dogs-icon { font-size: 4rem; margin-bottom: 1rem; }
 
