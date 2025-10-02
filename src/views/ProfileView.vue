@@ -4,11 +4,7 @@
     <header class="profile-header">
       <h1>Dog Profiles</h1>
       <div class="header-actions">
-        <button @click="toggleMenu" class="menu-btn" aria-label="Open menu">
-          <svg class="menu-icon" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
-          </svg>
-        </button>
+       
       </div>
     </header>
 
@@ -25,18 +21,24 @@
         <div class="dog-cards">
           <div v-for="dog in userDogs" :key="dog.id" class="dog-card">
             <div class="card-image">
-              <img v-if="dog.photos && dog.photos.length > 0" :src="dog.photos[0]" :alt="dog.name" />
+              <img
+                v-if="(dog.gallery && dog.gallery.length) || (dog.photos && dog.photos.length)"
+                :src="(dog.gallery?.[0] || dog.photos?.[0])"
+                :alt="dog.name"
+              />
               <div v-else class="no-photo">
                 <svg viewBox="0 0 24 24">
                   <path fill="currentColor" d="M12 12a5 5 0 1 0 0-10a5 5 0 0 0 0 10m0 2c-5.33 0-8 2.667-8 6v2h16v-2c0-3.333-2.67-6-8-6Z"/>
                 </svg>
               </div>
             </div>
+
             <div class="card-content">
               <h3>{{ dog.name }}</h3>
               <p class="breed">{{ dog.breed }}</p>
               <p class="location">{{ dog.location || 'Location not set' }}</p>
             </div>
+
             <div class="card-actions">
               <button class="preview-btn" @click="previewDog(dog)">
                 <svg viewBox="0 0 24 24">
@@ -49,6 +51,9 @@
                   <path fill="currentColor" d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/>
                 </svg>
                 Edit
+              </button>
+              <button class="delete-btn" @click="deleteDogById(dog.id)" :disabled="deletingId === dog.id">
+                {{ deletingId === dog.id ? 'Deleting…' : 'Delete' }}
               </button>
             </div>
           </div>
@@ -75,16 +80,30 @@
             </svg>
             Back to Profiles
           </button>
+
           <h2>{{ editingProfile?.name || 'New Dog Profile' }}</h2>
-          <button class="save-btn" @click="saveProfile" :disabled="saving || !currentUser">
-            {{ saving ? 'Saving…' : 'Save Changes' }}
-          </button>
+
+          <div class="edit-actions">
+            <button
+              class="danger-btn"
+              v-if="editingProfile?.id"
+              @click="deleteCurrentDog"
+              :disabled="deletingId === editingProfile?.id"
+              title="Delete this profile"
+            >
+              {{ deletingId === editingProfile?.id ? 'Deleting…' : 'Delete Profile' }}
+            </button>
+
+            <button class="save-btn" @click="saveProfile" :disabled="saving || !currentUser">
+              {{ saving ? 'Saving…' : 'Save Changes' }}
+            </button>
+          </div>
         </div>
 
         <!-- Tabs -->
         <div class="tab-navigation">
-          <button 
-            v-for="tab in tabs" 
+          <button
+            v-for="tab in tabs"
             :key="tab.id"
             :class="['tab-btn', { active: activeTab === tab.id }]"
             @click="setActiveTab(tab.id)"
@@ -184,7 +203,7 @@
             </div>
           </div>
 
-          <!-- Other tabs (Medical, Training, Preferences) -->
+          <!-- Medical Tab -->
           <div v-if="activeTab === 'medical'" class="tab-panel">
             <div class="medical-section">
               <h3>Health Certifications</h3>
@@ -200,6 +219,7 @@
             </div>
           </div>
 
+          <!-- Training Tab -->
           <div v-if="activeTab === 'training'" class="tab-panel">
             <div class="training-section">
               <h3>Training & Certifications</h3>
@@ -220,6 +240,7 @@
             </div>
           </div>
 
+          <!-- Preferences Tab -->
           <div v-if="activeTab === 'preferences'" class="tab-panel">
             <div class="preferences-section">
               <h3>Breeding Preferences</h3>
@@ -244,10 +265,12 @@
     <!-- Profile Preview Modal -->
     <ProfilePreview
       v-if="showPreview"
-      :profile="previewDogData"
-      :photos="previewPhotos"
+      :profile="previewDogData || dogProfile"
+      :photos="previewPhotos.length ? previewPhotos : photos"
       @close="showPreview = false"
-      @edit="showPreview = false; editDog(previewDogData)"
+      @edit="() => { showPreview = false; activeTab = 'basic' }"
+      @like="handleLike"
+      @pass="handlePass"
     />
 
     <!-- Slide-out Nav -->
@@ -264,35 +287,40 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { auth, db, storage } from '../lib/firebase'
+// If your alias isn't set, change '@/firebase' -> '../firebase'
+import { auth, db, storage } from '@/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
-import { doc, setDoc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore'
+import {
+  addDoc, collection, doc, getDoc, getDocs,
+  query, setDoc, updateDoc, where, arrayUnion, deleteDoc, serverTimestamp
+} from 'firebase/firestore'
 import { ref as sRef, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage'
 import ProfilePreview from '../components/ProfilePreview.vue'
 
 const router = useRouter()
 
-// State
+/* ---------- State ---------- */
 const showMenu = ref(false)
-const editingProfile = ref(null)
+const editingProfile = ref<any | null>(null)
 const showPreview = ref(false)
-const previewDogData = ref(null)
-const previewPhotos = ref([])
-const activeTab = ref('basic')
+const previewDogData = ref<any | null>(null)
+const previewPhotos = ref<string[]>([])
+const activeTab = ref<'basic' | 'medical' | 'training' | 'preferences' | 'gallery'>('basic')
 const saving = ref(false)
-const currentUser = ref(null)
-const userDogs = ref([])
+const currentUser = ref<{ uid: string } | null>(null)
+const userDogs = ref<any[]>([])
+const deletingId = ref<string | null>(null)
 
-// Upload state
-const fileInput = ref(null)
+/* Upload state */
+const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 const uploadProgress = ref(0)
-const photos = ref([])
+const photos = ref<string[]>([])
 
-// Dog profile data
-const dogProfile = reactive({
+/* Dog profile form model */
+const dogProfile = reactive<any>({
   name: '',
   breed: '',
   sex: 'male',
@@ -320,9 +348,9 @@ const tabs = [
   { id: 'gallery', label: 'Gallery' }
 ]
 
-// Functions
+/* ---------- UI helpers ---------- */
 const toggleMenu = () => { showMenu.value = !showMenu.value }
-const setActiveTab = (tabId) => { activeTab.value = tabId }
+const setActiveTab = (tabId: any) => { activeTab.value = tabId }
 
 const calculateAge = () => {
   if (dogProfile.birthday) {
@@ -335,22 +363,28 @@ const calculateAge = () => {
 
 const updateWeight = () => { dogProfile.weight = `${dogProfile.weightValue} pounds` }
 
+/* ---------- Grid actions ---------- */
 const addNewDog = () => {
-  editingProfile.value = { id: 'new', name: 'New Dog' }
+  // Pre-allocate a Firestore ID so uploads can start immediately
+  const newId = doc(collection(db, 'dogs')).id
+  editingProfile.value = { id: newId, name: 'New Dog' }
   resetDogProfile()
   activeTab.value = 'basic'
 }
 
-const editDog = (dog) => {
-  editingProfile.value = dog
-  Object.assign(dogProfile, dog)
-  photos.value = dog.photos || []
+const editDog = (dog: any) => {
+  editingProfile.value = { id: dog.id, name: dog.name }
+  Object.assign(dogProfile, {
+    ...dog,
+    sex: dog.sex === 'F' ? 'female' : (dog.sex === 'M' ? 'male' : (dog.sex || 'male'))
+  })
+  photos.value = (dog.gallery && dog.gallery.length ? dog.gallery : dog.photos) || []
   activeTab.value = 'basic'
 }
 
-const previewDog = (dog) => {
+const previewDog = (dog: any) => {
   previewDogData.value = dog
-  previewPhotos.value = dog.photos || []
+  previewPhotos.value = (dog.gallery && dog.gallery.length ? dog.gallery : dog.photos) || []
   showPreview.value = true
 }
 
@@ -377,19 +411,39 @@ const resetDogProfile = () => {
   photos.value = []
 }
 
-// Firebase functions
+/* ---------- Firestore helpers ---------- */
 const dogDocRef = () => {
   if (!currentUser.value) throw new Error('Not signed in')
-  if (!editingProfile.value?.id) throw new Error('No dog selected')
+  if (!editingProfile.value) throw new Error('No dog selected')
+  if (!editingProfile.value.id) return null
   return doc(db, 'dogs', editingProfile.value.id)
 }
 
+/** Ensure a stub doc exists so uploads can arrayUnion() immediately */
+const ensureDogDocExists = async () => {
+  const ref = dogDocRef()
+  if (!ref) throw new Error('No dog id yet')
+  const snap = await getDoc(ref)
+  if (!snap.exists()) {
+    await setDoc(ref, {
+      ownerId: currentUser.value!.uid,
+      name: dogProfile.name || 'Untitled',
+      sex: dogProfile.sex === 'female' ? 'F' : 'M',
+      breed: dogProfile.breed || '',
+      gallery: [],
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true })
+  }
+}
+
+/* Save create/update */
 const saveProfile = async () => {
   try {
     if (!currentUser.value) throw new Error('Sign in to save')
     saving.value = true
-    
-    const payload = {
+
+    const payload: any = {
       ownerId: currentUser.value.uid,
       name: dogProfile.name || 'Untitled',
       sex: dogProfile.sex === 'female' ? 'F' : 'M',
@@ -408,10 +462,17 @@ const saveProfile = async () => {
       minAgePref: dogProfile.minAgePref || '',
       maxAgePref: dogProfile.maxAgePref || '',
       travelDistance: dogProfile.travelDistance || '50',
-      gallery: photos.value
+      gallery: photos.value,
+      updatedAt: serverTimestamp()
     }
-    
-    await setDoc(dogDocRef(), payload, { merge: true })
+
+    if (!editingProfile.value?.id) {
+      const ref = await addDoc(collection(db, 'dogs'), payload)
+      editingProfile.value = { id: ref.id, name: payload.name }
+    } else {
+      await setDoc(dogDocRef()!, payload, { merge: true })
+    }
+
     await fetchDogs()
     editingProfile.value = null
   } catch (e) {
@@ -422,68 +483,105 @@ const saveProfile = async () => {
   }
 }
 
+/* Load dogs owned by the current user */
 const fetchDogs = async () => {
   if (!currentUser.value) return
   try {
-    // Sample data for now - replace with actual Firebase query
-    userDogs.value = [
-      { id: '1', name: 'Tango', breed: 'Golden Retriever', sex: 'male', age: '3 years', birthday: '2021-01-14',
-        weight: '62 pounds', weightValue: 62, temperament: 'Friendly, energetic, and great with kids',
-        location: 'San Francisco, CA', trainingLevel: 'intermediate', certifications: ['akc'],
-        trainingNotes: 'Completed basic obedience training at 6 months. Excellent recall and house trained.',
-        lookingFor: 'breeding', preferredBreeds: 'Golden Retriever, Labrador', minAgePref: 2, maxAgePref: 5, travelDistance: '50',
-        photos: ['https://images.unsplash.com/photo-1552053831-71594a27632d?w=400&h=500&fit=crop'] },
-      { id: '2', name: 'Luna', breed: 'German Shepherd', sex: 'female', age: '2 years', birthday: '2022-03-15',
-        weight: '55 pounds', weightValue: 55, temperament: 'Intelligent, protective, and loyal',
-        location: 'San Francisco, CA', trainingLevel: 'advanced', certifications: ['akc', 'therapy'],
-        trainingNotes: 'Advanced obedience training completed. Therapy dog certified.',
-        lookingFor: 'companion', preferredBreeds: 'German Shepherd, Belgian Malinois', minAgePref: 1, maxAgePref: 4, travelDistance: '25',
-        photos: ['https://images.unsplash.com/photo-1547407139-3c921a71905c?w=400&h=500&fit=crop'] }
-    ]
+    const q = query(collection(db, 'dogs'), where('ownerId', '==', currentUser.value.uid))
+    const snap = await getDocs(q)
+    userDogs.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
   } catch (e) {
     console.error('fetchDogs error', e)
   }
 }
 
-// Upload functions
+/* ---------- Delete profile ---------- */
+async function deleteDogById(id: string) {
+  if (!currentUser.value) return
+  const ok = confirm('Delete this dog profile? This cannot be undone.')
+  if (!ok) return
+
+  try {
+    deletingId.value = id
+
+    // 1) Read the doc to find gallery/photos to delete from Storage
+    const dref = doc(db, 'dogs', id)
+    const snap = await getDoc(dref)
+    if (snap.exists()) {
+      const data: any = snap.data()
+      const urls: string[] = [...(data.gallery || []), ...(data.photos || [])]
+      // Best-effort delete storage files; ignore failures (could be external URLs)
+      for (const url of urls) {
+        try {
+          const objRef = sRef(storage, url) // ref can take a full gs:// or https URL
+          await deleteObject(objRef)
+        } catch (err) {
+          // ignore individual file deletion errors
+        }
+      }
+    }
+
+    // 2) Delete the Firestore doc
+    await deleteDoc(dref)
+
+    // 3) Update local state
+    userDogs.value = userDogs.value.filter(d => d.id !== id)
+    if (editingProfile.value?.id === id) {
+      editingProfile.value = null
+      resetDogProfile()
+    }
+
+  } catch (e) {
+    console.error('deleteDogById error', e)
+    alert('Failed to delete profile. Check console for details.')
+  } finally {
+    deletingId.value = null
+  }
+}
+
+const deleteCurrentDog = async () => {
+  if (!editingProfile.value?.id) return
+  await deleteDogById(editingProfile.value.id)
+}
+
+/* ---------- Uploads ---------- */
 const choosePhotos = () => fileInput.value?.click()
 
-const onFilesSelected = async (e) => {
+const onFilesSelected = async (e: any) => {
   const input = e.target
   if (!input.files || input.files.length === 0) return
-  if (!currentUser.value) { 
-    console.warn('No auth user - please sign in first')
-    alert('Please sign in to upload photos')
-    return 
+  if (!currentUser.value) { alert('Please sign in to upload photos'); return }
+
+  // Make sure we have an ID for this dog; allocate if missing (should be set by addNewDog)
+  if (!editingProfile.value?.id) {
+    const newId = doc(collection(db, 'dogs')).id
+    editingProfile.value = { id: newId, name: dogProfile.name || 'New Dog' }
   }
 
-  console.log('Starting upload for user:', currentUser.value.uid)
   uploading.value = true
   uploadProgress.value = 0
 
   try {
-    for (const file of Array.from(input.files)) {
-      const path = `dogs/${currentUser.value.uid}/${editingProfile.value.id}/gallery/${Date.now()}_${file.name}`
-      console.log('Uploading to path:', path)
+    // Ensure the stub doc exists so arrayUnion works right away
+    await ensureDogDocExists()
+
+    for (const file of Array.from(input.files as FileList)) {
+      const path = `dogs/${currentUser.value.uid}/${editingProfile.value!.id}/gallery/${Date.now()}_${file.name}`
       const storageRef = sRef(storage, path)
       const task = uploadBytesResumable(storageRef, file, { contentType: file.type })
-      console.log('Upload task created, starting upload...')
 
-      await new Promise((resolve, reject) => {
-        task.on('state_changed',
-          (snap) => {
-            uploadProgress.value = Math.round((snap.bytesTransferred / snap.totalBytes) * 100)
-          },
+      await new Promise<string>((resolve, reject) => {
+        task.on(
+          'state_changed',
+          (snap) => { uploadProgress.value = Math.round((snap.bytesTransferred / snap.totalBytes) * 100) },
           (err) => reject(err),
           async () => {
             try {
               const url = await getDownloadURL(task.snapshot.ref)
-              await updateDoc(dogDocRef(), { gallery: arrayUnion(url) })
+              await updateDoc(dogDocRef()!, { gallery: arrayUnion(url), updatedAt: serverTimestamp() })
               photos.value.push(url)
               resolve(url)
-            } catch (err) {
-              reject(err)
-            }
+            } catch (err) { reject(err) }
           }
         )
       })
@@ -498,20 +596,20 @@ const onFilesSelected = async (e) => {
   }
 }
 
-const removePhoto = async (url) => {
-  if (!currentUser.value) return
+const removePhoto = async (url: string) => {
+  if (!currentUser.value || !editingProfile.value?.id) return
   try {
     const objectRef = sRef(storage, url)
     await deleteObject(objectRef).catch(() => {})
   } catch (e) {
-    console.warn('deleteObject warning:', e)
+    // ignore
   }
   try {
-    const snap = await getDoc(dogDocRef())
+    const snap = await getDoc(dogDocRef()!)
     if (snap.exists()) {
-      const data = snap.data()
-      const next = (data.gallery || []).filter((u) => u !== url)
-      await updateDoc(dogDocRef(), { gallery: next })
+      const data = snap.data() as any
+      const next = (data.gallery || []).filter((u: string) => u !== url)
+      await updateDoc(dogDocRef()!, { gallery: next, updatedAt: serverTimestamp() })
     }
   } catch (e) {
     console.error('removePhoto error', e)
@@ -520,661 +618,141 @@ const removePhoto = async (url) => {
   }
 }
 
-const handleDrop = (e) => {
+const handleDrop = (e: DragEvent) => {
   const files = Array.from(e.dataTransfer?.files || [])
   if (!files.length) return
   onFilesSelected({ target: { files } })
 }
 
-// Preview handlers
-const handleLike = () => {
-  console.log('Profile liked!')
-  showPreview.value = false
-}
+/* ---------- Preview handlers ---------- */
+const handleLike = () => { showPreview.value = false }
+const handlePass = () => { showPreview.value = false }
 
-const handlePass = () => {
-  console.log('Profile passed!')
-  showPreview.value = false
-}
-
-// Navigation
+/* ---------- Navigation ---------- */
 const goToDiscover = () => { router.push('/discover'); showMenu.value = false }
 const goToMatches = () => { router.push('/matches'); showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 
+/* ---------- Init ---------- */
 onMounted(async () => {
   onAuthStateChanged(auth, async (u) => {
     currentUser.value = u ? { uid: u.uid } : null
     if (currentUser.value) {
       await fetchDogs()
+    } else {
+      userDogs.value = []
     }
   })
 })
 </script>
 
 <style scoped>
-.profile-page {
-  min-height: 100vh;
-  background: #f8f9fa;
-}
-
-.profile-header {
-  background: #6A2C4A;
-  color: white;
-  padding: 1rem 2rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
-
-.profile-header h1 {
-  font-size: 1.5rem;
-  margin: 0;
-}
-
-.header-actions {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.menu-btn {
-  background: none;
-  border: none;
-  color: white;
-  cursor: pointer;
-  padding: 0.5rem;
-  border-radius: 50%;
-  transition: background-color 0.3s;
-}
-
-.menu-btn:hover {
-  background: rgba(255,255,255,0.1);
-}
-
-.menu-icon {
-  width: 24px;
-  height: 24px;
-}
-
-.main-content {
-  padding: 2rem;
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.profiles-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-}
-
-.profiles-header h2 {
-  margin: 0 0 0.5rem 0;
-  color: #333;
-  font-size: 2rem;
-}
-
-.profiles-header p {
-  margin: 0;
-  color: #666;
-  font-size: 1.1rem;
-}
-
-.dog-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 1.5rem;
-}
-
-.dog-card {
-  background: white;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-  transition: all 0.3s ease;
-  cursor: pointer;
-}
-
-.dog-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-}
-
-.card-image {
-  height: 200px;
-  overflow: hidden;
-  position: relative;
-}
-
-.card-image img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.no-photo {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #e9ecef;
-  color: #6c757d;
-}
-
-.no-photo svg {
-  width: 48px;
-  height: 48px;
-}
-
-.card-content {
-  padding: 1.5rem;
-}
-
-.card-content h3 {
-  margin: 0 0 0.5rem 0;
-  color: #333;
-  font-size: 1.25rem;
-  font-weight: 600;
-}
-
-.card-content .breed {
-  margin: 0 0 0.25rem 0;
-  color: #6A2C4A;
-  font-weight: 500;
-}
-
-.card-content .location {
-  margin: 0;
-  color: #666;
-  font-size: 0.9rem;
-}
-
-.card-actions {
-  padding: 0 1.5rem 1.5rem 1.5rem;
-  display: flex;
-  gap: 0.75rem;
-}
-
-.preview-btn, .edit-btn {
-  flex: 1;
-  padding: 0.75rem;
-  border: none;
-  border-radius: 8px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-}
-
-.preview-btn {
-  background: #6A2C4A;
-  color: white;
-}
-
-.preview-btn:hover {
-  background: #5a2438;
-}
-
-.edit-btn {
-  background: #e9ecef;
-  color: #333;
-}
-
-.edit-btn:hover {
-  background: #dee2e6;
-}
-
-.preview-btn svg, .edit-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.add-card {
-  border: 2px dashed #6A2C4A;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 300px;
-}
-
-.add-content {
-  text-align: center;
-  color: #6A2C4A;
-}
-
-.add-icon {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 1rem;
-}
-
-.add-content h3 {
-  margin: 0 0 0.5rem 0;
-  font-size: 1.25rem;
-}
-
-.add-content p {
-  margin: 0;
-  color: #666;
-}
-
-/* Edit Profile Styles */
-.edit-profile {
-  background: white;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
-
-.edit-header {
-  background: #6A2C4A;
-  color: white;
-  padding: 1.5rem 2rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.back-btn {
-  background: none;
-  border: none;
-  color: white;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 1rem;
-  transition: opacity 0.2s;
-}
-
-.back-btn:hover {
-  opacity: 0.8;
-}
-
-.back-btn svg {
-  width: 20px;
-  height: 20px;
-}
-
-.edit-header h2 {
-  margin: 0;
-  font-size: 1.5rem;
-}
-
-.save-btn {
-  background: white;
-  color: #6A2C4A;
-  border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.save-btn:hover:enabled {
-  background: #f8f9fa;
-  transform: translateY(-1px);
-}
-
-.save-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.tab-navigation {
-  background: #e9ecef;
-  display: flex;
-  padding: 0 2rem;
-  border-bottom: 1px solid #dee2e6;
-}
-
-.tab-btn {
-  background: none;
-  border: none;
-  padding: 1rem 1.5rem;
-  cursor: pointer;
-  color: #6c757d;
-  font-weight: 500;
-  border-bottom: 3px solid transparent;
-  transition: all 0.3s;
-}
-
-.tab-btn.active {
-  background: white;
-  color: #333;
-  border-bottom-color: #6A2C4A;
-  border-radius: 8px 8px 0 0;
-}
-
-.tab-btn:hover:not(.active) {
-  color: #6A2C4A;
-}
-
-.tab-content {
-  background: white;
-  min-height: 500px;
-  padding: 2rem;
-}
-
-.tab-panel {
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.profile-form {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-}
-
-.form-group label {
-  font-weight: 600;
-  color: #333;
-  margin-bottom: 0.5rem;
-}
-
-.form-group input, .form-group select, .form-group textarea {
-  padding: 0.75rem;
-  border: 2px solid #e9ecef;
-  border-radius: 8px;
-  font-size: 1rem;
-  transition: border-color 0.3s;
-}
-
-.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
-  outline: none;
-  border-color: #6A2C4A;
-}
-
-.sex-buttons {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.sex-btn {
-  flex: 1;
-  padding: 0.75rem;
-  border: 2px solid #e9ecef;
-  background: white;
-  border-radius: 25px;
-  cursor: pointer;
-  transition: all 0.3s;
-  font-weight: 500;
-}
-
-.sex-btn.active {
-  background: #6A2C4A;
-  color: white;
-  border-color: #6A2C4A;
-}
-
-.age-input-group, .weight-input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.age-display, .weight-display {
-  background: #f8f9fa;
-  color: #666;
-}
-
-.control-label {
-  font-size: 0.9rem;
-  color: #666;
-  margin-bottom: 0.25rem;
-}
-
-.date-input {
-  width: 100%;
-}
-
-.weight-slider {
-  width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  background: #e9ecef;
-  outline: none;
-  -webkit-appearance: none;
-}
-
-.weight-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #6A2C4A;
-  cursor: pointer;
-}
-
-.weight-slider::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #6A2C4A;
-  cursor: pointer;
-  border: none;
-}
-
-.gallery-section, .medical-section, .training-section, .preferences-section {
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-}
-
-.gallery-section h3, .medical-section h3, .training-section h3, .preferences-section h3 {
-  color: #333;
-  margin: 0;
-  font-size: 1.5rem;
-}
-
-.upload-area {
-  border: 2px dashed #e9ecef;
-  border-radius: 12px;
-  padding: 2rem;
-  text-align: center;
-  background: #f8f9fa;
-}
-
-.upload-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-}
-
-.upload-icon {
-  width: 48px;
-  height: 48px;
-  color: #6c757d;
-}
-
-.upload-btn {
-  background: #6A2C4A;
-  color: white;
-  border: none;
-  padding: 0.75rem 1.5rem;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 500;
-}
-
-.photo-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 1rem;
-}
-
-.photo-item {
-  position: relative;
-  aspect-ratio: 1;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #f8f9fa;
-  border: 2px solid #e9ecef;
-}
-
-.photo-item img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.remove-photo {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  background: rgba(0,0,0,0.7);
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.add-photo {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.3s;
-}
-
-.add-photo:hover {
-  border-color: #6A2C4A;
-  background: #f8f9fa;
-}
-
-.add-photo .add-icon {
-  width: 32px;
-  height: 32px;
-  color: #6c757d;
-  margin-bottom: 0.5rem;
-}
-
-.preference-buttons {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.pref-btn {
-  padding: 0.75rem 1rem;
-  border: 2px solid #e9ecef;
-  background: white;
-  border-radius: 25px;
-  cursor: pointer;
-  transition: all 0.3s;
-  font-weight: 500;
-}
-
-.pref-btn.active {
-  background: #6A2C4A;
-  color: white;
-  border-color: #6A2C4A;
-}
-
-.nav-menu {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 200;
-}
-
-.nav-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0,0,0,0.5);
-}
-
-.nav-content {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 250px;
-  height: 100%;
-  background: #6A2C4A;
-  padding: 2rem 0;
-}
-
-.nav-item {
-  padding: 1rem 2rem;
-  color: white;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-.nav-item:hover, .nav-item.active {
-  background: rgba(255,255,255,0.1);
-}
-
-.nav-item span {
-  font-size: 1.1rem;
-  font-weight: 500;
-}
+.profile-page { min-height: 100vh; background: #f8f9fa; }
+.profile-header { background: #6A2C4A; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+.profile-header h1 { font-size: 1.5rem; margin: 0; }
+.header-actions { display: flex; gap: 0.5rem; align-items: center; }
+.menu-btn { background: none; border: none; color: white; cursor: pointer; padding: 0.5rem; border-radius: 50%; transition: background-color 0.3s; }
+.menu-btn:hover { background: rgba(255,255,255,0.1); }
+.menu-icon { width: 24px; height: 24px; }
+
+.preview-btn { background: #6A2C4A; color: white; border: none; padding: 0.6rem 1rem; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; margin-right: 0.5rem; }
+.preview-btn:hover:enabled { background: #5a2438; transform: translateY(-1px); box-shadow: 0 2px 10px rgba(106, 44, 74, 0.3); }
+.preview-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.main-content { padding: 2rem; max-width: 1200px; margin: 0 auto; }
+.profiles-grid { display: flex; flex-direction: column; gap: 2rem; }
+.profiles-header h2 { margin: 0 0 0.5rem 0; color: #333; font-size: 2rem; }
+.profiles-header p { margin: 0; color: #666; font-size: 1.1rem; }
+
+.dog-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }
+.dog-card { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); transition: all 0.3s ease; cursor: pointer; }
+.dog-card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
+.card-image { height: 200px; overflow: hidden; position: relative; }
+.card-image img { width: 100%; height: 100%; object-fit: cover; }
+.no-photo { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #e9ecef; color: #6c757d; }
+.no-photo svg { width: 48px; height: 48px; }
+.card-content { padding: 1.5rem; }
+.card-content h3 { margin: 0 0 0.5rem 0; color: #333; font-size: 1.25rem; font-weight: 600; }
+.card-content .breed { margin: 0 0 0.25rem 0; color: #6A2C4A; font-weight: 500; }
+.card-content .location { margin: 0; color: #666; font-size: 0.9rem; }
+.card-actions { padding: 0 1.5rem 1.5rem 1.5rem; display: flex; gap: 0.75rem; }
+.edit-btn { background: #e9ecef; color: #333; border: none; border-radius: 8px; padding: 0.75rem; font-weight: 500; cursor: pointer; }
+.edit-btn:hover { background: #dee2e6; }
+.delete-btn { background: #fff0f0; color: #c0392b; border: 1px solid #f5c6cb; border-radius: 8px; padding: 0.75rem; font-weight: 600; cursor: pointer; }
+.delete-btn:hover { background: #ffe3e3; }
+
+.edit-profile { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.edit-header { background: #6A2C4A; color: white; padding: 1.5rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+.back-btn { background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 1rem; transition: opacity 0.2s; }
+.back-btn:hover { opacity: 0.8; }
+.back-btn svg { width: 20px; height: 20px; }
+.edit-header h2 { margin: 0; font-size: 1.5rem; }
+.edit-actions { display: flex; gap: .5rem; align-items: center; }
+.save-btn { background: white; color: #6A2C4A; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.save-btn:hover:enabled { background: #f8f9fa; transform: translateY(-1px); }
+.save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.danger-btn { background: #fff0f0; color: #fff; color: #c0392b; border: 1px solid #f5c6cb; padding: 0.6rem 1rem; border-radius: 8px; font-weight: 700; }
+
+.tab-navigation { background: #e9ecef; display: flex; padding: 0 2rem; border-bottom: 1px solid #dee2e6; }
+.tab-btn { background: none; border: none; padding: 1rem 1.5rem; cursor: pointer; color: #6c757d; font-weight: 500; border-bottom: 3px solid transparent; transition: all 0.3s; }
+.tab-btn.active { background: white; color: #333; border-bottom-color: #6A2C4A; border-radius: 8px 8px 0 0; }
+.tab-btn:hover:not(.active) { color: #6A2C4A; }
+
+.tab-content { background: white; min-height: 500px; padding: 2rem; }
+.tab-panel { max-width: 600px; margin: 0 auto; }
+.profile-form { display: flex; flex-direction: column; gap: 1.5rem; }
+.form-group { display: flex; flex-direction: column; }
+.form-group label { font-weight: 600; color: #333; margin-bottom: 0.5rem; }
+.form-group input, .form-group select, .form-group textarea { padding: 0.75rem; border: 2px solid #e9ecef; border-radius: 8px; font-size: 1rem; transition: border-color 0.3s; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #6A2C4A; }
+
+.sex-buttons { display: flex; gap: 0.5rem; }
+.sex-btn { flex: 1; padding: 0.75rem; border: 2px solid #e9ecef; background: white; border-radius: 25px; cursor: pointer; transition: all 0.3s; font-weight: 500; }
+.sex-btn.active { background: #6A2C4A; color: white; border-color: #6A2C4A; }
+
+.age-input-group, .weight-input-group { display: flex; flex-direction: column; gap: 1rem; }
+.age-display, .weight-display { background: #f8f9fa; color: #666; }
+.control-label { font-size: 0.9rem; color: #666; margin-bottom: 0.25rem; }
+.date-input { width: 100%; }
+.weight-slider { width: 100%; height: 6px; border-radius: 3px; background: #e9ecef; outline: none; -webkit-appearance: none; }
+.weight-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #6A2C4A; cursor: pointer; }
+.weight-slider::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #6A2C4A; cursor: pointer; border: none; }
+
+.gallery-section, .medical-section, .training-section, .preferences-section { display: flex; flex-direction: column; gap: 2rem; }
+.gallery-section h3, .medical-section h3, .training-section h3, .preferences-section h3 { color: #333; margin: 0; font-size: 1.5rem; }
+.upload-area { border: 2px dashed #e9ecef; border-radius: 12px; padding: 2rem; text-align: center; background: #f8f9fa; }
+.upload-box { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+.upload-icon { width: 48px; height: 48px; color: #6c757d; }
+.upload-btn { background: #6A2C4A; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; cursor: pointer; font-weight: 500; }
+
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; }
+.photo-item { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: #f8f9fa; border: 2px solid #e9ecef; }
+.photo-item img { width: 100%; height: 100%; object-fit: cover; }
+.remove-photo { position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+.add-photo { display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s; }
+.add-photo:hover { border-color: #6A2C4A; background: #f8f9fa; }
+.add-photo .add-icon { width: 32px; height: 32px; color: #6c757d; margin-bottom: 0.5rem; }
+
+.preference-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.pref-btn { padding: 0.75rem 1rem; border: 2px solid #e9ecef; background: white; border-radius: 25px; cursor: pointer; transition: all 0.3s; font-weight: 500; }
+.pref-btn.active { background: #6A2C4A; color: white; border-color: #6A2C4A; }
+
+.nav-menu { position: fixed; top: 0; right: 0; width: 100%; height: 100%; z-index: 200; }
+.nav-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
+.nav-content { position: absolute; top: 0; right: 0; width: 250px; height: 100%; background: #6A2C4A; padding: 2rem 0; }
+.nav-item { padding: 1rem 2rem; color: white; cursor: pointer; transition: background-color 0.3s; }
+.nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.1); }
+.nav-item span { font-size: 1.1rem; font-weight: 500; }
 
 @media (max-width: 768px) {
-  .main-content {
-    padding: 1rem;
-  }
-  
-  .dog-cards {
-    grid-template-columns: 1fr;
-  }
-  
-  .edit-header {
-    padding: 1rem;
-    flex-direction: column;
-    gap: 1rem;
-    align-items: flex-start;
-  }
-  
-  .tab-navigation {
-    padding: 0 1rem;
-    overflow-x: auto;
-  }
-  
-  .tab-btn {
-    padding: 0.75rem 1rem;
-    white-space: nowrap;
-  }
-  
-  .tab-content {
-    padding: 1rem;
-  }
-  
-  .sex-buttons, .preference-buttons {
-    flex-direction: column;
-  }
-  
-  .nav-content {
-    width: 200px;
-  }
+  .main-content { padding: 1rem; }
+  .dog-cards { grid-template-columns: 1fr; }
+  .edit-header { padding: 1rem; flex-direction: column; gap: 1rem; align-items: flex-start; }
+  .tab-navigation { padding: 0 1rem; overflow-x: auto; }
+  .tab-btn { padding: 0.75rem 1rem; white-space: nowrap; }
+  .tab-content { padding: 1rem; }
+  .sex-buttons, .preference-buttons { flex-direction: column; }
+  .nav-content { width: 200px; }
 }
 </style>

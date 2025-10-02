@@ -1,280 +1,284 @@
 <template>
   <div class="discover-page">
-    <!-- Header -->
-    <header class="discover-header">
-      <h1>Discover Dogs</h1>
-      <div class="header-actions">
-        <button @click="generateAIDogProfiles" class="generate-btn" :disabled="isGenerating">
-          <svg class="generate-icon" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/>
-          </svg>
-          <span v-if="!isGenerating">Generate AI Dogs</span>
-          <span v-else>Generating...</span>
-        </button>
-        <button @click="toggleFilters" class="filter-btn">
-          <svg class="filter-icon" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M3 17h18v-2H3v2zm0-5h18V7H3v5zm0-7v2h18V5H3z"/>
-          </svg>
-        </button>
-        <button @click="toggleMenu" class="menu-btn">
-          <svg class="menu-icon" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
-          </svg>
-        </button>
-      </div>
-    </header>
+    <!-- Gate while checking profile ownership -->
+    <div v-if="checkingProfile" class="checking-gate">
+      <p>Checking your profile…</p>
+    </div>
 
-    <!-- Filters Panel -->
-    <div v-if="showFilters" class="filters-panel">
-      <div class="filter-group">
-        <label>Breed</label>
-        <select v-model="filters.breed">
-          <option value="">All Breeds</option>
-          <option value="golden retriever">Golden Retriever</option>
-          <option value="labrador">Labrador</option>
-          <option value="german shepherd">German Shepherd</option>
-          <option value="bulldog">Bulldog</option>
-          <option value="poodle">Poodle</option>
-        </select>
+    <template v-else>
+      <!-- Header -->
+      <header class="discover-header">
+        <h1>Discover Dogs</h1>
+        <div class="header-actions">
+          
+          <button @click="toggleFilters" class="filter-btn">
+            <svg class="filter-icon" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M3 17h18v-2H3v2zm0-5h18V7H3v5zm0-7v2h18V5H3z"/>
+            </svg>
+          </button>
+          <button @click="toggleMenu" class="menu-btn">
+            <svg class="menu-icon" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Filters Panel -->
+      <div v-if="showFilters" class="filters-panel">
+        <div class="filter-group">
+          <label>Breed</label>
+          <select v-model="filters.breed">
+            <option value="">All Breeds</option>
+            <option value="golden retriever">Golden Retriever</option>
+            <option value="labrador">Labrador</option>
+            <option value="german shepherd">German Shepherd</option>
+            <option value="bulldog">Bulldog</option>
+            <option value="poodle">Poodle</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Age Range</label>
+          <div class="age-range">
+            <input v-model="filters.minAge" type="number" placeholder="Min" min="0" max="20">
+            <span>-</span>
+            <input v-model="filters.maxAge" type="number" placeholder="Max" min="0" max="20">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label>Distance</label>
+          <select v-model="filters.distance">
+            <option value="10">Within 10 miles</option>
+            <option value="25">Within 25 miles</option>
+            <option value="50">Within 50 miles</option>
+            <option value="100">Within 100 miles</option>
+          </select>
+        </div>
+        <button @click="applyFilters" class="apply-filters-btn">Apply Filters</button>
       </div>
-      <div class="filter-group">
-        <label>Age Range</label>
-        <div class="age-range">
-          <input v-model="filters.minAge" type="number" placeholder="Min" min="0" max="20">
-          <span>-</span>
-          <input v-model="filters.maxAge" type="number" placeholder="Max" min="0" max="20">
+
+      <!-- Loading State -->
+      <div v-if="isFiltering" class="filtering-overlay">
+        <div class="filtering-content">
+          <div class="filtering-spinner">🐾</div>
+          <p>Finding dogs near you...</p>
         </div>
       </div>
-      <div class="filter-group">
-        <label>Distance</label>
-        <select v-model="filters.distance">
-          <option value="10">Within 10 miles</option>
-          <option value="25">Within 25 miles</option>
-          <option value="50">Within 50 miles</option>
-          <option value="100">Within 100 miles</option>
-        </select>
-      </div>
-      <button @click="applyFilters" class="apply-filters-btn">Apply Filters</button>
-    </div>
 
-    <!-- Loading State -->
-    <div v-if="isFiltering" class="filtering-overlay">
-      <div class="filtering-content">
-        <div class="filtering-spinner">🐾</div>
-        <p>Finding dogs near you...</p>
-      </div>
-    </div>
+      <!-- Dog Cards Stack -->
+      <div class="cards-container">
+        <div v-if="dogs.length === 0" class="no-dogs">
+          <div class="no-dogs-icon">🐕</div>
+          <h3>No more dogs to discover!</h3>
+          <p>Check back later for new profiles or adjust your filters.</p>
+          <button @click="resetFilters" class="btn btn-primary">Reset Filters</button>
+        </div>
 
-    <!-- Dog Cards Stack -->
-    <div class="cards-container">
-      <div v-if="dogs.length === 0" class="no-dogs">
-        <div class="no-dogs-icon">🐕</div>
-        <h3>No more dogs to discover!</h3>
-        <p>Check back later for new profiles or adjust your filters.</p>
-        <button @click="resetFilters" class="btn btn-primary">Reset Filters</button>
+        <div 
+          v-for="(dog, index) in dogs" 
+          :key="dog.id"
+          :class="['dog-card', { 'active': index === 0 }]"
+          :style="{ zIndex: dogs.length - index, '--offset': cardOffset + 'px', '--rotation': (cardOffset/20) + 'deg' }"
+          @touchstart="handleTouchStart"
+          @touchmove="handleTouchMove"
+          @touchend="handleTouchEnd"
+          @mousedown="handleMouseDown"
+          @mousemove="handleMouseMove"
+          @mouseup="handleMouseUp"
+          @mouseleave="handleMouseUp"
+        >
+          <div class="card-image">
+            <img v-if="dog.image" :src="dog.image" :alt="dog.name" />
+            <div v-else class="no-photo" style="display:flex;align-items:center;justify-content:center;height:100%;background:#eee;color:#666;">
+              <span>no photo</span>
+            </div>
+            <div class="card-overlay">
+              <div class="dog-info">
+                <h2>{{ dog.name }}, {{ dog.age }}</h2>
+                <p>{{ dog.breed }} • {{ dog.location }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-details">
+            <!-- Basic Info Section -->
+            <div class="info-section">
+              <div class="detail-row">
+                <span class="label">Sex:</span>
+                <span class="value">{{ dog.sex }}</span>
+              </div>
+              <div class="detail-row">
+                <span class="label">Weight:</span>
+                <span class="value">{{ dog.weight }} lbs</span>
+              </div>
+            </div>
+
+            <!-- About Section -->
+            <div v-if="dog.temperament" class="content-section">
+              <h4>About {{ dog.name }}</h4>
+              <p class="temperament">{{ dog.temperament }}</p>
+            </div>
+
+            <!-- Training & Certifications Section -->
+            <div v-if="hasTrainingInfo(dog)" class="content-section">
+              <h4>Training & Certifications</h4>
+              <div v-if="dog.trainingLevel" class="training-level">
+                <span class="label">Training Level:</span>
+                <span class="value">{{ dog.trainingLevel }}</span>
+              </div>
+              <div v-if="dog.certifications && dog.certifications.length > 0" class="certifications">
+                <span class="label">Certifications:</span>
+                <div class="cert-badges">
+                  <span v-for="cert in dog.certifications" :key="cert" class="cert-badge">
+                    {{ certDisplay(cert) }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="dog.trainingNotes" class="training-notes">
+                <p>{{ dog.trainingNotes }}</p>
+              </div>
+            </div>
+
+            <!-- Medical Papers Section -->
+            <div v-if="dog.medicalPapers && dog.medicalPapers.length > 0" class="content-section">
+              <h4>Health Certifications</h4>
+              <div class="medical-papers">
+                <div v-for="(paper, index) in dog.medicalPapers" :key="index" class="paper-item">
+                  <div class="paper-icon">📄</div>
+                  <div class="paper-info">
+                    <span class="paper-name">{{ paper.name || 'Health Certificate' }}</span>
+                    <span class="paper-date">{{ paper.date || 'Date not specified' }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Preferences Section -->
+            <div v-if="hasPreferences(dog)" class="content-section">
+              <h4>Breeding Preferences</h4>
+              <div v-if="dog.lookingFor" class="preference-item">
+                <span class="label">Looking for:</span>
+                <span class="value">{{ dog.lookingFor }}</span>
+              </div>
+              <div v-if="dog.preferredBreeds" class="preference-item">
+                <span class="label">Preferred breeds:</span>
+                <span class="value">{{ dog.preferredBreeds }}</span>
+              </div>
+              <div v-if="dog.minAgePref || dog.maxAgePref" class="preference-item">
+                <span class="label">Age preference:</span>
+                <span class="value">{{ agePreferenceDisplay(dog) }}</span>
+              </div>
+              <div v-if="dog.travelDistance" class="preference-item">
+                <span class="label">Willing to travel:</span>
+                <span class="value">{{ dog.travelDistance }} miles</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div 
-        v-for="(dog, index) in dogs" 
-        :key="dog.id"
-        :class="['dog-card', { 'active': index === 0 }]"
-        :style="{ zIndex: dogs.length - index, '--offset': cardOffset + 'px', '--rotation': (cardOffset/20) + 'deg' }"
-        @touchstart="handleTouchStart"
-        @touchmove="handleTouchMove"
-        @touchend="handleTouchEnd"
-        @mousedown="handleMouseDown"
-        @mousemove="handleMouseMove"
-        @mouseup="handleMouseUp"
-        @mouseleave="handleMouseUp"
-      >
-        <div class="card-image">
-          <img :src="dog.image" :alt="dog.name" />
-          <div class="card-overlay">
-            <div class="dog-info">
-              <h2>{{ dog.name }}, {{ dog.age }}</h2>
-              <p>{{ dog.breed }} • {{ dog.location }}</p>
+      <!-- Action Buttons -->
+      <div class="action-buttons">
+        <button @click="passDog" class="action-btn pass-btn">
+          <svg class="action-icon" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
+        </button>
+        <button @click="likeDog" class="action-btn like-btn">
+          <svg class="action-icon" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Match Animation -->
+      <div v-if="showMatchAnimation" class="match-animation">
+        <div class="match-overlay"></div>
+        <div class="match-content">
+          <div class="match-bubbles">
+            <div class="bubble bubble-1">💕</div>
+            <div class="bubble bubble-2">🎉</div>
+            <div class="bubble bubble-3">💖</div>
+            <div class="bubble bubble-4">✨</div>
+            <div class="bubble bubble-5">💝</div>
+            <div class="bubble bubble-6">🎊</div>
+          </div>
+          <div class="match-text">
+            <h2>It's a Match!</h2>
+            <p>You and {{ matchedDog?.name }} liked each other!</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Interface -->
+      <div v-if="showChat" class="chat-interface">
+        <div class="chat-header">
+          <div class="chat-dog-info">
+            <img :src="matchedDog?.image" :alt="matchedDog?.name" class="chat-dog-avatar" />
+            <div>
+              <h3>{{ matchedDog?.name }}</h3>
+              <p>{{ matchedDog?.ownerName }}</p>
+            </div>
+          </div>
+          <button @click="closeChat" class="close-chat-btn">×</button>
+        </div>
+        
+        <div class="chat-messages">
+          <div 
+            v-for="message in chatMessages" 
+            :key="message.id"
+            :class="['message', { 'own-message': message.sender === 'You' }]"
+          >
+            <div class="message-content">
+              <span class="message-sender" v-if="message.sender !== 'You'">{{ message.sender }}</span>
+              <p class="message-text">{{ message.message }}</p>
+              <span class="message-time">{{ formatTime(message.timestamp) }}</span>
             </div>
           </div>
         </div>
         
-        <div class="card-details">
-          <!-- Basic Info Section -->
-          <div class="info-section">
-            <div class="detail-row">
-              <span class="label">Sex:</span>
-              <span class="value">{{ dog.sex }}</span>
-            </div>
-            <div class="detail-row">
-              <span class="label">Weight:</span>
-              <span class="value">{{ dog.weight }} lbs</span>
-            </div>
-          </div>
+        <div class="chat-input">
+          <input 
+            v-model="newMessage" 
+            @keyup.enter="sendMessage"
+            placeholder="Type a message..."
+            class="message-input"
+          />
+          <button @click="sendMessage" class="send-btn" :disabled="!newMessage.trim()">
+            <svg class="send-icon" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M2,21L23,12L2,3V10L17,12L2,14V21Z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
 
-          <!-- About Section -->
-          <div v-if="dog.temperament" class="content-section">
-            <h4>About {{ dog.name }}</h4>
-            <p class="temperament">{{ dog.temperament }}</p>
+      <!-- Navigation Menu -->
+      <div v-if="showMenu" class="nav-menu">
+        <div class="nav-overlay" @click="toggleMenu"></div>
+        <div class="nav-content">
+          <div class="nav-item" @click="goToProfile">
+            <span>Profile</span>
           </div>
-
-          <!-- Training & Certifications Section -->
-          <div v-if="hasTrainingInfo(dog)" class="content-section">
-            <h4>Training & Certifications</h4>
-            <div v-if="dog.trainingLevel" class="training-level">
-              <span class="label">Training Level:</span>
-              <span class="value">{{ dog.trainingLevel }}</span>
-            </div>
-            <div v-if="dog.certifications && dog.certifications.length > 0" class="certifications">
-              <span class="label">Certifications:</span>
-              <div class="cert-badges">
-                <span v-for="cert in dog.certifications" :key="cert" class="cert-badge">
-                  {{ certDisplay(cert) }}
-                </span>
-              </div>
-            </div>
-            <div v-if="dog.trainingNotes" class="training-notes">
-              <p>{{ dog.trainingNotes }}</p>
-            </div>
+          <div class="nav-item active" @click="toggleMenu">
+            <span>Discover Dogs</span>
           </div>
-
-          <!-- Medical Papers Section -->
-          <div v-if="dog.medicalPapers && dog.medicalPapers.length > 0" class="content-section">
-            <h4>Health Certifications</h4>
-            <div class="medical-papers">
-              <div v-for="(paper, index) in dog.medicalPapers" :key="index" class="paper-item">
-                <div class="paper-icon">📄</div>
-                <div class="paper-info">
-                  <span class="paper-name">{{ paper.name || 'Health Certificate' }}</span>
-                  <span class="paper-date">{{ paper.date || 'Date not specified' }}</span>
-                </div>
-              </div>
-            </div>
+          <div class="nav-item" @click="goToMatches">
+            <span>Matches</span>
           </div>
-
-          <!-- Preferences Section -->
-          <div v-if="hasPreferences(dog)" class="content-section">
-            <h4>Breeding Preferences</h4>
-            <div v-if="dog.lookingFor" class="preference-item">
-              <span class="label">Looking for:</span>
-              <span class="value">{{ dog.lookingFor }}</span>
-            </div>
-            <div v-if="dog.preferredBreeds" class="preference-item">
-              <span class="label">Preferred breeds:</span>
-              <span class="value">{{ dog.preferredBreeds }}</span>
-            </div>
-            <div v-if="dog.minAgePref || dog.maxAgePref" class="preference-item">
-              <span class="label">Age preference:</span>
-              <span class="value">{{ agePreferenceDisplay(dog) }}</span>
-            </div>
-            <div v-if="dog.travelDistance" class="preference-item">
-              <span class="label">Willing to travel:</span>
-              <span class="value">{{ dog.travelDistance }} miles</span>
-            </div>
+          <div class="nav-item" @click="goToSettings">
+            <span>Settings</span>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Action Buttons -->
-    <div class="action-buttons">
-      <button @click="passDog" class="action-btn pass-btn">
-        <svg class="action-icon" viewBox="0 0 24 24">
-          <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-        </svg>
-      </button>
-      <button @click="likeDog" class="action-btn like-btn">
-        <svg class="action-icon" viewBox="0 0 24 24">
-          <path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-        </svg>
-      </button>
-    </div>
-
-    <!-- Match Animation -->
-    <div v-if="showMatchAnimation" class="match-animation">
-      <div class="match-overlay"></div>
-      <div class="match-content">
-        <div class="match-bubbles">
-          <div class="bubble bubble-1">💕</div>
-          <div class="bubble bubble-2">🎉</div>
-          <div class="bubble bubble-3">💖</div>
-          <div class="bubble bubble-4">✨</div>
-          <div class="bubble bubble-5">💝</div>
-          <div class="bubble bubble-6">🎊</div>
-        </div>
-        <div class="match-text">
-          <h2>It's a Match!</h2>
-          <p>You and {{ matchedDog?.name }} liked each other!</p>
+      <!-- Filtering Overlay (duplicate for safety) -->
+      <div v-if="isFiltering" class="filtering-overlay">
+        <div class="filtering-content">
+          <div class="filtering-spinner">🐾</div>
+          <p>Finding dogs near you...</p>
         </div>
       </div>
-    </div>
-
-    <!-- Chat Interface -->
-    <div v-if="showChat" class="chat-interface">
-      <div class="chat-header">
-        <div class="chat-dog-info">
-          <img :src="matchedDog?.image" :alt="matchedDog?.name" class="chat-dog-avatar" />
-          <div>
-            <h3>{{ matchedDog?.name }}</h3>
-            <p>{{ matchedDog?.ownerName }}</p>
-          </div>
-        </div>
-        <button @click="closeChat" class="close-chat-btn">×</button>
-      </div>
-      
-      <div class="chat-messages">
-        <div 
-          v-for="message in chatMessages" 
-          :key="message.id"
-          :class="['message', { 'own-message': message.sender === 'You' }]"
-        >
-          <div class="message-content">
-            <span class="message-sender" v-if="message.sender !== 'You'">{{ message.sender }}</span>
-            <p class="message-text">{{ message.message }}</p>
-            <span class="message-time">{{ formatTime(message.timestamp) }}</span>
-          </div>
-        </div>
-      </div>
-      
-      <div class="chat-input">
-        <input 
-          v-model="newMessage" 
-          @keyup.enter="sendMessage"
-          placeholder="Type a message..."
-          class="message-input"
-        />
-        <button @click="sendMessage" class="send-btn" :disabled="!newMessage.trim()">
-          <svg class="send-icon" viewBox="0 0 24 24">
-            <path fill="currentColor" d="M2,21L23,12L2,3V10L17,12L2,14V21Z"/>
-          </svg>
-        </button>
-      </div>
-    </div>
-
-    <!-- Navigation Menu -->
-    <div v-if="showMenu" class="nav-menu">
-      <div class="nav-overlay" @click="toggleMenu"></div>
-      <div class="nav-content">
-        <div class="nav-item" @click="goToProfile">
-          <span>Profile</span>
-        </div>
-        <div class="nav-item active" @click="toggleMenu">
-          <span>Discover Dogs</span>
-        </div>
-        <div class="nav-item" @click="goToMatches">
-          <span>Matches</span>
-        </div>
-        <div class="nav-item" @click="goToSettings">
-          <span>Settings</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Filtering Overlay (duplicate for safety) -->
-    <div v-if="isFiltering" class="filtering-overlay">
-      <div class="filtering-content">
-        <div class="filtering-spinner">🐾</div>
-        <p>Finding dogs near you...</p>
-      </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -283,10 +287,10 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
 import { createLike } from '../services/likes'
-import { generateMultipleAIDogProfiles } from '../services/aiProfileGenerator'
-import { doc, setDoc, collection } from 'firebase/firestore'
+import { doc, setDoc, collection, query, where, limit, getDocs } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-
+import { auth } from '../lib/firebase'
+import { onAuthStateChanged } from 'firebase/auth'
 
 const router = useRouter()
 
@@ -294,6 +298,7 @@ const router = useRouter()
 const showFilters = ref(false)
 const showMenu = ref(false)
 const dogs = ref([])
+const currentUser = ref(null)
 const currentIndex = ref(0)
 const matches = ref([])
 const showMatchAnimation = ref(false)
@@ -304,6 +309,9 @@ const newMessage = ref('')
 const isFiltering = ref(false)
 const filterError = ref('')
 const isGenerating = ref(false)
+
+// NEW: gate until we verify user has at least one profile
+const checkingProfile = ref(true)
 
 // Touch/Mouse handling
 const isDragging = ref(false)
@@ -319,7 +327,30 @@ const filters = reactive({
   distance: '25'
 })
 
-onMounted(loadDogs)
+/** Ensure user is signed in and has at least one dog profile; otherwise redirect to profile creation. */
+async function ensureProfileExists() {
+  return new Promise((resolve) => {
+    onAuthStateChanged(auth, async (u) => {
+      if (!u) {
+        router.replace('/profile?create=1')
+        resolve(false)
+        return
+      }
+      currentUser.value = { uid: u.uid }
+
+      // Check for at least one dog
+      const qRef = query(collection(db, 'dogs'), where('ownerId', '==', u.uid), limit(1))
+      const snap = await getDocs(qRef)
+      if (snap.empty) {
+        router.replace('/profile?create=1')
+        resolve(false)
+      } else {
+        checkingProfile.value = false
+        resolve(true)
+      }
+    })
+  })
+}
 
 // Helper functions for profile display (defined early for template access)
 const certDisplay = (cert) => {
@@ -406,9 +437,47 @@ const calculateDistance = (userLocation, dogLocation) => {
 
 
 // --- Firestore mapping & loading ---
+// --- helpers to normalize image fields (JS) ---
+function firstPhotoUrl(d) {
+  // Prefer gallery[0]
+  if (Array.isArray(d && d.gallery) && d.gallery.length) return d.gallery[0]
+
+  // Then photos[0] which can be a string URL or an object { url }
+  if (Array.isArray(d && d.photos) && d.photos.length) {
+    const p0 = d.photos[0]
+    if (typeof p0 === 'string') return p0
+    if (p0 && typeof p0 === 'object' && 'url' in p0) return p0.url || ''
+  }
+
+  return ''
+}
+function excludeMyDogs(arr) {
+  const uid = currentUser.value?.uid
+  if (!uid) return arr
+  return arr.filter(d => d.ownerId && d.ownerId !== uid)
+}
+
+function normalizePhotoArray(d) {
+  if (Array.isArray(d && d.gallery) && d.gallery.length) return d.gallery.slice()
+  if (Array.isArray(d && d.photos) && d.photos.length) {
+    return d.photos
+      .map((p) => (typeof p === 'string' ? p : (p && p.url) || ''))
+      .filter(Boolean)
+  }
+  return []
+}
+
+// --- map Firestore doc to Discover card (JS) ---
 function mapDogDocToCard(d) {
-  const firstPhoto = (d.photos?.[0]?.url) || ''
-  const ageYears = d.age ?? (d.birthdate ? Math.max(0, Math.floor((Date.now() - new Date(d.birthdate)) / (365.25*24*3600*1000))) : '')
+  const ageYears =
+    d.age ??
+    (d.birthdate
+      ? Math.max(
+          0,
+          Math.floor((Date.now() - new Date(d.birthdate).getTime()) / (365.25 * 24 * 3600 * 1000))
+        )
+      : '')
+
   return {
     id: d.id || d._id || d.docId || (d.ownerId + ':' + (d.name || Math.random())),
     name: d.name || 'Unnamed',
@@ -419,11 +488,14 @@ function mapDogDocToCard(d) {
     location: d.ownerLocation || d.location || '',
     temperament: d.temperament || '',
     healthCertified: !!d.healthCertified,
-    image: firstPhoto,
+
+    // ✅ always a real URL or empty string
+    image: firstPhotoUrl(d),
+
     ownerId: d.ownerId,
     ownerName: d.ownerName || 'Owner',
     coords: d.coords || null,
-    // Additional profile data
+
     trainingLevel: d.trainingLevel || '',
     certifications: d.certifications || [],
     trainingNotes: d.trainingNotes || '',
@@ -433,7 +505,9 @@ function mapDogDocToCard(d) {
     maxAgePref: d.maxAgePref || '',
     travelDistance: d.travelDistance || '',
     medicalPapers: d.medicalPapers || [],
-    photos: d.photos || []
+
+    // normalized photo list (all URLs)
+    photos: normalizePhotoArray(d),
   }
 }
 
@@ -441,7 +515,7 @@ async function loadDogs() {
   isFiltering.value = true
   try {
     const docs = await listDogs({ onlyWithPhotos: false, max: 50, breed: filters.breed || undefined })
-    dogs.value = docs.map(mapDogDocToCard)
+    dogs.value = excludeMyDogs(docs.map(mapDogDocToCard))
   } catch (e) {
     console.error(e)
     filterError.value = 'Failed to load dogs'
@@ -459,7 +533,7 @@ const applyFilters = async () => {
     onlyWithPhotos: false,
     max: 60
   })
-  let filteredDogs = base.map(mapDogDocToCard)
+  let filteredDogs = excludeMyDogs(base.map(mapDogDocToCard))
 
   try {
     if (filters.breed) {
@@ -485,16 +559,14 @@ const applyFilters = async () => {
         console.log(dogLoc)
         // check if dog has stored coords, else geocode their address
         // lat lng should be calculated NOT here but this is a fallback for demo purposes
-          if(dogLoc && dogLoc.lat && dogLoc.lng) {
-            continue
-          } else {
-          if (!dogLoc && dog.location) {
-            dogLoc = await geocodeAddress(dog.location)
-            await new Promise(r => setTimeout(r, 1000)) // rate-limit friendly
-            console.log("after geocoding")
-            console.log(dogLoc)
-            //update their lat lng in firestore here for now, update method later. This is to save time in demo period. 
-          }
+        if (dogLoc && dogLoc.lat && dogLoc.lng) {
+          // dog already has coords; calculate distance below
+        } else if (!dogLoc && dog.location) {
+          dogLoc = await geocodeAddress(dog.location)
+          await new Promise(r => setTimeout(r, 1000)) // rate-limit friendly
+          console.log("after geocoding")
+          console.log(dogLoc)
+          // update in Firestore later if desired
         }
         if (!dogLoc) continue
         const dist = calculateDistance(userLocation, dogLoc)
@@ -623,47 +695,13 @@ const getRandomResponse = () => {
 const closeChat = () => { showChat.value = false; matchedDog.value = null; chatMessages.value = [] }
 const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-// AI Profile Generation
-const generateAIDogProfiles = async () => {
-  if (isGenerating.value) return
-  
-  isGenerating.value = true
-  try {
-    console.log('Generating 5 AI dog profiles...')
-    const aiProfiles = await generateMultipleAIDogProfiles(5)
-    
-    // Save each profile to Firestore
-    for (const profile of aiProfiles) {
-      try {
-        // Create a new document with auto-generated ID
-        const newDogRef = doc(collection(db, 'dogs'))
-        const profileWithId = {
-          ...profile,
-          ownerId: 'ai_generator', // Special owner ID for AI-generated profiles
-          ownerName: 'AI Generated',
-          createdAt: new Date().toISOString(),
-          id: newDogRef.id
-        }
-        
-        await setDoc(newDogRef, profileWithId)
-        console.log(`Saved AI profile: ${profile.name} (${profile.breed})`)
-      } catch (error) {
-        console.error('Error saving AI profile:', error)
-      }
-    }
-    
-    // Refresh the dog list to show new profiles
+// Init
+onMounted(async () => {
+  const ok = await ensureProfileExists()
+  if (ok) {
     await loadDogs()
-    
-    alert(`Successfully generated and added ${aiProfiles.length} new AI dog profiles!`)
-    
-  } catch (error) {
-    console.error('Error generating AI profiles:', error)
-    alert('Failed to generate AI profiles. Please try again.')
-  } finally {
-    isGenerating.value = false
   }
-}
+})
 </script>
 
 <style scoped>
@@ -672,6 +710,15 @@ const generateAIDogProfiles = async () => {
   min-height: 100vh;
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   position: relative;
+}
+
+/* Small message while we check profile */
+.checking-gate {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  color: #6A2C4A;
+  font-weight: 600;
 }
 
 .discover-header {
@@ -782,7 +829,7 @@ const generateAIDogProfiles = async () => {
 .nav-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
 .nav-content { position: absolute; top: 0; right: 0; width: 250px; height: 100%; background: #6A2C4A; padding: 2rem 0; }
 .nav-item { padding: 1rem 2rem; color: white; cursor: pointer; transition: background-color 0.3s ease; }
-.nav-item:hover, .nav-item.active { background: rgba(255, 255, 255, 0.1); }
+.nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.1); }
 .nav-item span { font-size: 1.1rem; font-weight: 500; }
 
 .match-animation { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1000; display: flex; align-items: center; justify-content: center; }
