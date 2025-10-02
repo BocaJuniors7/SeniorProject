@@ -1,16 +1,25 @@
 <template>
   <div class="discover-page">
-    <!-- Gate while checking profile ownership -->
-    <div v-if="checkingProfile" class="checking-gate">
-      <p>Checking your profile…</p>
+    <!-- Profile gate cover (no redirect; just a CTA) -->
+    <div
+      v-if="!checkingProfile && !hasProfile"
+      class="profile-gate"
+      aria-live="polite"
+    >
+      <div class="gate-card">
+        <div class="gate-icon">🐶</div>
+        <h2>Create a dog profile to start discovering</h2>
+        <p>You’ll need at least one dog profile before you can browse others.</p>
+        <button class="gate-btn" @click="goToProfileCreate">Create your dog profile</button>
+      </div>
     </div>
 
-    <template v-else>
+    <!-- Normal Discover UI only when a profile exists -->
+    <template v-if="!checkingProfile && hasProfile">
       <!-- Header -->
       <header class="discover-header">
         <h1>Discover Dogs</h1>
         <div class="header-actions">
-          
           <button @click="toggleFilters" class="filter-btn">
             <svg class="filter-icon" viewBox="0 0 24 24">
               <path fill="currentColor" d="M3 17h18v-2H3v2zm0-5h18V7H3v5zm0-7v2h18V5H3z"/>
@@ -279,6 +288,11 @@
         </div>
       </div>
     </template>
+
+    <!-- Small “checking profile” placeholder -->
+    <div v-if="checkingProfile" class="checking-gate">
+      <p>Checking your profile…</p>
+    </div>
   </div>
 </template>
 
@@ -288,8 +302,7 @@ import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
 import { createLike } from '../services/likes'
 import { doc, setDoc, collection, query, where, limit, getDocs } from 'firebase/firestore'
-import { db } from '../lib/firebase'
-import { auth } from '../lib/firebase'
+import { db, auth } from '../lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
 
 const router = useRouter()
@@ -310,7 +323,8 @@ const isFiltering = ref(false)
 const filterError = ref('')
 const isGenerating = ref(false)
 
-// NEW: gate until we verify user has at least one profile
+// Profile gate state
+const hasProfile = ref(false)
 const checkingProfile = ref(true)
 
 // Touch/Mouse handling
@@ -327,32 +341,30 @@ const filters = reactive({
   distance: '25'
 })
 
-/** Ensure user is signed in and has at least one dog profile; otherwise redirect to profile creation. */
+/** Check if user is signed in and owns at least one dog profile. No redirect here. */
 async function ensureProfileExists() {
   return new Promise((resolve) => {
     onAuthStateChanged(auth, async (u) => {
+      currentUser.value = u ? { uid: u.uid } : null
+
       if (!u) {
-        router.replace('/profile?create=1')
+        hasProfile.value = false
+        checkingProfile.value = false
         resolve(false)
         return
       }
-      currentUser.value = { uid: u.uid }
 
-      // Check for at least one dog
+      // Query for at least one dog profile owned by this user
       const qRef = query(collection(db, 'dogs'), where('ownerId', '==', u.uid), limit(1))
       const snap = await getDocs(qRef)
-      if (snap.empty) {
-        router.replace('/profile?create=1')
-        resolve(false)
-      } else {
-        checkingProfile.value = false
-        resolve(true)
-      }
+      hasProfile.value = !snap.empty
+      checkingProfile.value = false
+      resolve(hasProfile.value)
     })
   })
 }
 
-// Helper functions for profile display (defined early for template access)
+// Helper functions for profile display
 const certDisplay = (cert) => {
   const certMap = {
     'akc': 'AKC Registered',
@@ -363,21 +375,8 @@ const certDisplay = (cert) => {
   }
   return certMap[cert.toLowerCase()] || cert
 }
-
-const hasTrainingInfo = (dog) => {
-  return dog.trainingLevel || 
-         (dog.certifications && dog.certifications.length > 0) ||
-         dog.trainingNotes
-}
-
-const hasPreferences = (dog) => {
-  return dog.lookingFor ||
-         dog.preferredBreeds ||
-         dog.minAgePref ||
-         dog.maxAgePref ||
-         dog.travelDistance
-}
-
+const hasTrainingInfo = (dog) => dog.trainingLevel || (dog.certifications && dog.certifications.length > 0) || dog.trainingNotes
+const hasPreferences = (dog) => dog.lookingFor || dog.preferredBreeds || dog.minAgePref || dog.maxAgePref || dog.travelDistance
 const agePreferenceDisplay = (dog) => {
   const min = dog.minAgePref
   const max = dog.maxAgePref
@@ -391,8 +390,9 @@ const agePreferenceDisplay = (dog) => {
 // UI helpers
 const toggleFilters = () => { showFilters.value = !showFilters.value }
 const toggleMenu = () => { showMenu.value = !showMenu.value }
+const goToProfileCreate = () => router.push('/profile?create=1')
 
-// --- Geocoding & distance (fallback if no stored coords) ---
+// Geocoding / distance helpers (unchanged)
 const geocodeAddress = async (address) => {
   try {
     const response = await fetch(
@@ -411,44 +411,25 @@ const geocodeAddress = async (address) => {
 }
 
 const calculateDistance = (userLocation, dogLocation) => {
-  const earthRadiusMiles = 3963.19; // Earth's radius in miles
+  const R = 3963.19
+  const toRad = (d) => d * Math.PI / 180
+  const lat1 = toRad(userLocation.lat)
+  const lat2 = toRad(dogLocation.lat)
+  const dLat = toRad(dogLocation.lat - userLocation.lat)
+  const dLon = toRad(dogLocation.lng - userLocation.lng)
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon/2)**2
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+  return Math.round(R * c * 10) / 10
+}
 
-  // convert degrees to radians
-  const lat1Rad = userLocation.lat * Math.PI / 180;
-  const lat2Rad = dogLocation.lat * Math.PI / 180;
-  const latDiffRad = (dogLocation.lat - userLocation.lat) * Math.PI / 180;
-  const lonDiffRad = (dogLocation.lng - userLocation.lng) * Math.PI / 180;
-
-  // haversine formula
-  const squareHalfChordLength =
-    Math.sin(latDiffRad / 2) * Math.sin(latDiffRad / 2) +
-    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
-    Math.sin(lonDiffRad / 2) * Math.sin(lonDiffRad / 2);
-
-  const angularDistance = 2 * Math.atan2(
-    Math.sqrt(squareHalfChordLength),
-    Math.sqrt(1 - squareHalfChordLength)
-  );
-
-  const distanceMiles = earthRadiusMiles * angularDistance;
-
-  return Math.round(distanceMiles * 10) / 10; // nearest tenth of a mile
-};
-
-
-// --- Firestore mapping & loading ---
-// --- helpers to normalize image fields (JS) ---
+// Image normalization
 function firstPhotoUrl(d) {
-  // Prefer gallery[0]
   if (Array.isArray(d && d.gallery) && d.gallery.length) return d.gallery[0]
-
-  // Then photos[0] which can be a string URL or an object { url }
   if (Array.isArray(d && d.photos) && d.photos.length) {
     const p0 = d.photos[0]
     if (typeof p0 === 'string') return p0
     if (p0 && typeof p0 === 'object' && 'url' in p0) return p0.url || ''
   }
-
   return ''
 }
 function excludeMyDogs(arr) {
@@ -456,27 +437,19 @@ function excludeMyDogs(arr) {
   if (!uid) return arr
   return arr.filter(d => d.ownerId && d.ownerId !== uid)
 }
-
 function normalizePhotoArray(d) {
   if (Array.isArray(d && d.gallery) && d.gallery.length) return d.gallery.slice()
   if (Array.isArray(d && d.photos) && d.photos.length) {
-    return d.photos
-      .map((p) => (typeof p === 'string' ? p : (p && p.url) || ''))
-      .filter(Boolean)
+    return d.photos.map(p => (typeof p === 'string' ? p : (p && p.url) || '')).filter(Boolean)
   }
   return []
 }
 
-// --- map Firestore doc to Discover card (JS) ---
+// Map Firestore doc to card
 function mapDogDocToCard(d) {
-  const ageYears =
-    d.age ??
-    (d.birthdate
-      ? Math.max(
-          0,
-          Math.floor((Date.now() - new Date(d.birthdate).getTime()) / (365.25 * 24 * 3600 * 1000))
-        )
-      : '')
+  const ageYears = d.age ?? (d.birthdate
+    ? Math.max(0, Math.floor((Date.now() - new Date(d.birthdate).getTime()) / (365.25 * 24 * 3600 * 1000)))
+    : '')
 
   return {
     id: d.id || d._id || d.docId || (d.ownerId + ':' + (d.name || Math.random())),
@@ -488,14 +461,10 @@ function mapDogDocToCard(d) {
     location: d.ownerLocation || d.location || '',
     temperament: d.temperament || '',
     healthCertified: !!d.healthCertified,
-
-    // ✅ always a real URL or empty string
     image: firstPhotoUrl(d),
-
     ownerId: d.ownerId,
     ownerName: d.ownerName || 'Owner',
     coords: d.coords || null,
-
     trainingLevel: d.trainingLevel || '',
     certifications: d.certifications || [],
     trainingNotes: d.trainingNotes || '',
@@ -505,12 +474,11 @@ function mapDogDocToCard(d) {
     maxAgePref: d.maxAgePref || '',
     travelDistance: d.travelDistance || '',
     medicalPapers: d.medicalPapers || [],
-
-    // normalized photo list (all URLs)
     photos: normalizePhotoArray(d),
   }
 }
 
+// Load & filter
 async function loadDogs() {
   isFiltering.value = true
   try {
@@ -524,10 +492,8 @@ async function loadDogs() {
   }
 }
 
-// --- Filters ---
 const applyFilters = async () => {
   isFiltering.value = true
-  // pull fresh batch with coarse Firestore filtering first
   const base = await listDogs({
     breed: filters.breed || undefined,
     onlyWithPhotos: false,
@@ -540,33 +506,20 @@ const applyFilters = async () => {
       const b = filters.breed.toLowerCase()
       filteredDogs = filteredDogs.filter(dog => dog.breed?.toLowerCase() === b)
     }
-    if (filters.minAge) {
-      filteredDogs = filteredDogs.filter(dog => Number(dog.age) >= Number(filters.minAge))
-    }
-    if (filters.maxAge) {
-      filteredDogs = filteredDogs.filter(dog => Number(dog.age) <= Number(filters.maxAge))
-    }
+    if (filters.minAge) filteredDogs = filteredDogs.filter(dog => Number(dog.age) >= Number(filters.minAge))
+    if (filters.maxAge) filteredDogs = filteredDogs.filter(dog => Number(dog.age) <= Number(filters.maxAge))
 
     if (filters.distance) {
       const maxDistance = Number(filters.distance)
-      const userLocation = await geocodeAddress('Lakeland, FL') // TODO: replace with actual user location
+      const userLocation = await geocodeAddress('Lakeland, FL') // TODO: real user location
       if (!userLocation) throw new Error("Couldn't determine user's location")
 
       const out = []
       for (const dog of filteredDogs) {
         let dogLoc = dog.coords
-        console.log("before geocoding")
-        console.log(dogLoc)
-        // check if dog has stored coords, else geocode their address
-        // lat lng should be calculated NOT here but this is a fallback for demo purposes
-        if (dogLoc && dogLoc.lat && dogLoc.lng) {
-          // dog already has coords; calculate distance below
-        } else if (!dogLoc && dog.location) {
+        if (!(dogLoc && dogLoc.lat && dogLoc.lng) && dog.location) {
           dogLoc = await geocodeAddress(dog.location)
-          await new Promise(r => setTimeout(r, 1000)) // rate-limit friendly
-          console.log("after geocoding")
-          console.log(dogLoc)
-          // update in Firestore later if desired
+          await new Promise(r => setTimeout(r, 1000))
         }
         if (!dogLoc) continue
         const dist = calculateDistance(userLocation, dogLoc)
@@ -592,17 +545,11 @@ const resetFilters = () => {
   loadDogs()
 }
 
-const passDog = () => {
-  if (dogs.value.length > 0) {
-    dogs.value.shift()
-  }
-}
+const passDog = () => { if (dogs.value.length > 0) dogs.value.shift() }
 
-// ----- Simple demo persistence for matches (local only) -----
+// Local demo matches
 const MATCHES_KEY = 'demo_matches'
-function loadStoredMatches() {
-  try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] }
-}
+function loadStoredMatches() { try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] } }
 function saveStoredMatches(arr) { localStorage.setItem(MATCHES_KEY, JSON.stringify(arr)) }
 function addMatchToStorage(dog) {
   const existing = loadStoredMatches()
@@ -614,72 +561,61 @@ function addMatchToStorage(dog) {
 }
 
 const likeDog = async () => {
-  if (dogs.value.length > 0) {
-    const likedDog = dogs.value.shift()
-    try {
-      await createLike({ toDogId: likedDog.id, toDogOwnerId: likedDog.ownerId })
-    } catch (e) {
-      console.error('Like failed:', e)
-    }
-
-    const isMatch = checkForMatch(likedDog)
-    if (isMatch) {
-      matches.value.push(likedDog)
-      addMatchToStorage(likedDog)
-      matchedDog.value = likedDog
-      showMatchAnimation.value = true
-      setTimeout(() => {
-        showMatchAnimation.value = false
-        showChat.value = true
-        chatMessages.value = [
-          { id: 1, sender: 'system', message: `You matched with ${likedDog.name}! 🎉`, timestamp: new Date() },
-          { id: 2, sender: likedDog.ownerName, message: `Hi! I'm ${likedDog.ownerName}, ${likedDog.name}'s owner. She's such a sweet girl!`, timestamp: new Date() }
-        ]
-      }, 3000)
-    }
+  if (dogs.value.length === 0) return
+  const likedDog = dogs.value.shift()
+  try {
+    await createLike({ toDogId: likedDog.id, toDogOwnerId: likedDog.ownerId })
+  } catch (e) {
+    console.error('Like failed:', e)
+  }
+  const isMatch = checkForMatch(likedDog)
+  if (isMatch) {
+    matches.value.push(likedDog)
+    addMatchToStorage(likedDog)
+    matchedDog.value = likedDog
+    showMatchAnimation.value = true
+    setTimeout(() => {
+      showMatchAnimation.value = false
+      showChat.value = true
+      chatMessages.value = [
+        { id: 1, sender: 'system', message: `You matched with ${likedDog.name}! 🎉`, timestamp: new Date() },
+        { id: 2, sender: likedDog.ownerName, message: `Hi! I'm ${likedDog.ownerName}, ${likedDog.name}'s owner. She's such a sweet girl!`, timestamp: new Date() }
+      ]
+    }, 3000)
   }
 }
 
 const checkForMatch = (dog) => {
-  // TEMP demo logic; replace with server-side match creation later
   const tangoBreed = 'Golden Retriever'
   const tangoSex = 'male'
   const tangoAge = 3
-  return dog.breed.toLowerCase() === tangoBreed.toLowerCase() && dog.sex.toLowerCase() !== tangoSex && Math.abs(Number(dog.age) - tangoAge) <= 1
+  return dog.breed.toLowerCase() === tangoBreed.toLowerCase() &&
+         dog.sex.toLowerCase() !== tangoSex &&
+         Math.abs(Number(dog.age) - tangoAge) <= 1
 }
 
-// Touch and mouse event handlers
+// Drag handlers
 const handleTouchStart = (e) => { isDragging.value = true; startX.value = e.touches[0].clientX }
-const handleTouchMove = (e) => { if (!isDragging.value) return; currentX.value = e.touches[0].clientX; cardOffset.value = currentX.value - startX.value }
-const handleTouchEnd = () => {
-  if (!isDragging.value) return; isDragging.value = false
-  if (Math.abs(cardOffset.value) > 100) { cardOffset.value > 0 ? likeDog() : passDog() }
-  cardOffset.value = 0
-}
-const handleMouseDown = (e) => { isDragging.value = true; startX.value = e.clientX }
-const handleMouseMove = (e) => { if (!isDragging.value) return; currentX.value = e.clientX; cardOffset.value = currentX.value - startX.value }
-const handleMouseUp = () => {
-  if (!isDragging.value) return; isDragging.value = false
-  if (Math.abs(cardOffset.value) > 100) { cardOffset.value > 0 ? likeDog() : passDog() }
-  cardOffset.value = 0
-}
+const handleTouchMove  = (e) => { if (!isDragging.value) return; currentX.value = e.touches[0].clientX; cardOffset.value = currentX.value - startX.value }
+const handleTouchEnd   = () => { if (!isDragging.value) return; isDragging.value = false; if (Math.abs(cardOffset.value) > 100) { cardOffset.value > 0 ? likeDog() : passDog() } cardOffset.value = 0 }
+const handleMouseDown  = (e) => { isDragging.value = true; startX.value = e.clientX }
+const handleMouseMove  = (e) => { if (!isDragging.value) return; currentX.value = e.clientX; cardOffset.value = currentX.value - startX.value }
+const handleMouseUp    = () => { if (!isDragging.value) return; isDragging.value = false; if (Math.abs(cardOffset.value) > 100) { cardOffset.value > 0 ? likeDog() : passDog() } cardOffset.value = 0 }
 
-// Navigation
+// Nav
 const goToProfile = () => { router.push('/profile'); showMenu.value = false }
 const goToMatches = () => { router.push('/matches'); showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 
-// Chat functions
+// Chat
 const sendMessage = () => {
-  if (newMessage.value.trim()) {
-    chatMessages.value.push({ id: Date.now(), sender: 'You', message: newMessage.value, timestamp: new Date() })
-    newMessage.value = ''
-    setTimeout(() => {
-      chatMessages.value.push({ id: Date.now() + 1, sender: matchedDog.value.ownerName, message: getRandomResponse(), timestamp: new Date() })
-    }, 2000)
-  }
+  if (!newMessage.value.trim()) return
+  chatMessages.value.push({ id: Date.now(), sender: 'You', message: newMessage.value, timestamp: new Date() })
+  newMessage.value = ''
+  setTimeout(() => {
+    chatMessages.value.push({ id: Date.now() + 1, sender: matchedDog.value.ownerName, message: getRandomResponse(), timestamp: new Date() })
+  }, 2000)
 }
-
 const getRandomResponse = () => {
   const responses = [
     "That's wonderful! When would be a good time to meet?",
@@ -691,28 +627,60 @@ const getRandomResponse = () => {
   ]
   return responses[Math.floor(Math.random() * responses.length)]
 }
-
 const closeChat = () => { showChat.value = false; matchedDog.value = null; chatMessages.value = [] }
 const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 // Init
 onMounted(async () => {
   const ok = await ensureProfileExists()
-  if (ok) {
-    await loadDogs()
-  }
+  if (ok) await loadDogs()
 })
 </script>
 
 <style scoped>
-/* (Styles are unchanged from your original file) */
 .discover-page {
   min-height: 100vh;
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   position: relative;
 }
 
-/* Small message while we check profile */
+/* Profile gate overlay */
+.profile-gate {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at top, rgba(106,44,74,0.9), rgba(106,44,74,0.95));
+  display: grid;
+  place-items: center;
+  z-index: 2000;
+  padding: 2rem;
+  color: white;
+}
+.gate-card {
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 20px;
+  padding: 2rem 2.5rem;
+  max-width: 520px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.gate-icon { font-size: 3rem; margin-bottom: .75rem }
+.gate-card h2 { margin: 0 0 .5rem 0; font-size: 1.6rem; }
+.gate-card p { margin: 0 0 1.25rem 0; opacity: 0.9; }
+.gate-btn {
+  background: #fff;
+  color: #6A2C4A;
+  border: none;
+  padding: .9rem 1.25rem;
+  font-weight: 700;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.gate-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,0.25) }
+
+/* small “checking” state */
 .checking-gate {
   min-height: 60vh;
   display: grid;
@@ -721,6 +689,7 @@ onMounted(async () => {
   font-weight: 600;
 }
 
+/* Rest of your styles unchanged below */
 .discover-header {
   background: #6A2C4A;
   color: white;
@@ -739,145 +708,626 @@ onMounted(async () => {
 .filter-btn:hover, .menu-btn:hover { background: rgba(255, 255, 255, 0.1); }
 .filter-icon, .menu-icon { width: 24px; height: 24px; }
 
-.generate-btn {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: white;
-  cursor: pointer;
-  padding: 0.5rem 1rem;
-  border-radius: 20px;
-  transition: all 0.3s ease;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-}
+/* ... (keep the rest of your existing CSS unchanged) ... */
 .generate-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.2);
   transform: translateY(-1px);
 }
+
 .generate-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
 }
-.generate-icon { width: 18px; height: 18px; }
 
-.filters-panel { background: white; padding: 1.5rem; border-bottom: 1px solid #e9ecef; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.filter-group { margin-bottom: 1rem; }
-.filter-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #333; }
-.filter-group select, .filter-group input { width: 100%; padding: 0.75rem; border: 2px solid #e9ecef; border-radius: 8px; font-size: 1rem; }
-.age-range { display: flex; align-items: center; gap: 0.5rem; }
-.age-range input { flex: 1; }
-.apply-filters-btn { background: #6A2C4A; color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; cursor: pointer; width: 100%; }
+.generate-icon {
+  width: 18px;
+  height: 18px;
+}
 
-.cards-container { position: relative; height: 70vh; display: flex; justify-content: center; align-items: center; padding: 2rem; }
-.dog-card { position: absolute; width: 300px; height: 500px; background: white; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; cursor: grab; transition: transform 0.3s ease; }
-.dog-card:active { cursor: grabbing; }
-.dog-card.active { transform: translateX(var(--offset, 0px)) rotate(var(--rotation, 0deg)); }
-.card-image { position: relative; height: 60%; overflow: hidden; }
-.card-image img { width: 100%; height: 100%; object-fit: cover; }
-.card-overlay { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.7)); padding: 1rem; color: white; }
-.dog-info h2 { margin: 0 0 0.25rem 0; font-size: 1.5rem; }
-.dog-info p { margin: 0; opacity: 0.9; }
-.card-details { padding: 1rem; height: 40%; overflow-y: auto; }
-.detail-row { display: flex; justify-content: space-between; margin-bottom: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid #f0f0f0; }
-.detail-row:last-child { border-bottom: none; }
-.label { font-weight: 600; color: #666; }
-.value { color: #333; }
-.value.certified { color: #28a745; font-weight: 600; }
+.filters-panel {
+  background: white;
+  padding: 1.5rem;
+  border-bottom: 1px solid #e9ecef;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.filter-group {
+  margin-bottom: 1rem;
+}
+
+.filter-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.filter-group select,
+.filter-group input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e9ecef;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.age-range {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.age-range input {
+  flex: 1;
+}
+
+.apply-filters-btn {
+  background: #6A2C4A;
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+}
+
+.cards-container {
+  position: relative;
+  height: 70vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+}
+
+.dog-card {
+  position: absolute;
+  width: 300px;
+  height: 500px;
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  overflow: hidden;
+  cursor: grab;
+  transition: transform 0.3s ease;
+}
+
+.dog-card:active {
+  cursor: grabbing;
+}
+
+.dog-card.active {
+  transform: translateX(var(--offset, 0px)) rotate(var(--rotation, 0deg));
+}
+
+.card-image {
+  position: relative;
+  height: 60%;
+  overflow: hidden;
+}
+
+.card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.7));
+  padding: 1rem;
+  color: white;
+}
+
+.dog-info h2 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1.5rem;
+}
+
+.dog-info p {
+  margin: 0;
+  opacity: 0.9;
+}
+
+.card-details {
+  padding: 1rem;
+  height: 40%;
+  overflow-y: auto;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.label {
+  font-weight: 600;
+  color: #666;
+}
+
+.value {
+  color: #333;
+}
+
+.value.certified {
+  color: #28a745;
+  font-weight: 600;
+}
 
 /* New profile sections */
-.info-section { margin-bottom: 1rem; }
-.content-section { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #f0f0f0; }
-.content-section:last-child { border-bottom: none; }
-.content-section h4 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; color: #333; }
-.temperament { margin: 0; line-height: 1.4; color: #555; font-size: 0.9rem; }
+.info-section {
+  margin-bottom: 1rem;
+}
+
+.content-section {
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.content-section:last-child {
+  border-bottom: none;
+}
+
+.content-section h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.temperament {
+  margin: 0;
+  line-height: 1.4;
+  color: #555;
+  font-size: 0.9rem;
+}
 
 /* Training section */
-.training-level, .certifications, .training-notes { margin-bottom: 0.75rem; }
-.training-level:last-child, .certifications:last-child, .training-notes:last-child { margin-bottom: 0; }
-.cert-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
-.cert-badge { background: #6A2C4A; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 500; }
-.training-notes p { margin: 0; line-height: 1.4; color: #555; font-size: 0.85rem; }
+.training-level,
+.certifications,
+.training-notes {
+  margin-bottom: 0.75rem;
+}
+
+.training-level:last-child,
+.certifications:last-child,
+.training-notes:last-child {
+  margin-bottom: 0;
+}
+
+.cert-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.cert-badge {
+  background: #6A2C4A;
+  color: white;
+  padding: 0.2rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.training-notes p {
+  margin: 0;
+  line-height: 1.4;
+  color: #555;
+  font-size: 0.85rem;
+}
 
 /* Medical papers */
-.medical-papers { display: flex; flex-direction: column; gap: 0.5rem; }
-.paper-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
-.paper-icon { font-size: 1.2rem; }
-.paper-info { display: flex; flex-direction: column; gap: 0.1rem; }
-.paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
-.paper-date { font-size: 0.7rem; color: #666; }
+.medical-papers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.paper-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+}
+
+.paper-icon {
+  font-size: 1.2rem;
+}
+
+.paper-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.paper-name {
+  font-weight: 600;
+  color: #333;
+  font-size: 0.85rem;
+}
+
+.paper-date {
+  font-size: 0.7rem;
+  color: #666;
+}
 
 /* Preferences */
-.preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-.preference-item:last-child { margin-bottom: 0; }
-.preference-item .label { font-size: 0.8rem; }
-.preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
-.no-dogs { text-align: center; color: #666; }
-.no-dogs-icon { font-size: 4rem; margin-bottom: 1rem; }
+.preference-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
 
-.action-buttons { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); display: flex; gap: 2rem; z-index: 50; }
-.action-btn { width: 60px; height: 60px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 15px rgba(0,0,0,0.2); transition: all 0.3s ease; }
-.pass-btn { background: #ff4757; color: white; }
-.like-btn { background: #2ed573; color: white; }
-.action-btn:hover { transform: scale(1.1); }
-.action-icon { width: 24px; height: 24px; }
+.preference-item:last-child {
+  margin-bottom: 0;
+}
 
-.nav-menu { position: fixed; top: 0; right: 0; width: 100%; height: 100%; z-index: 200; }
-.nav-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
-.nav-content { position: absolute; top: 0; right: 0; width: 250px; height: 100%; background: #6A2C4A; padding: 2rem 0; }
-.nav-item { padding: 1rem 2rem; color: white; cursor: pointer; transition: background-color 0.3s ease; }
-.nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.1); }
-.nav-item span { font-size: 1.1rem; font-weight: 500; }
+.preference-item .label {
+  font-size: 0.8rem;
+}
 
-.match-animation { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1000; display: flex; align-items: center; justify-content: center; }
-.match-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(106, 44, 74, 0.9); }
-.match-content { position: relative; z-index: 1; text-align: center; color: white; }
-.match-bubbles { position: relative; width: 300px; height: 300px; margin: 0 auto 2rem; }
-.bubble { position: absolute; font-size: 2rem; animation: float 2s ease-in-out infinite; }
+.preference-item .value {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.no-dogs {
+  text-align: center;
+  color: #666;
+}
+
+.no-dogs-icon {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+}
+
+.action-buttons {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2rem;
+  z-index: 50;
+}
+
+.action-btn {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+  transition: all 0.3s ease;
+}
+
+.pass-btn {
+  background: #ff4757;
+  color: white;
+}
+
+.like-btn {
+  background: #2ed573;
+  color: white;
+}
+
+.action-btn:hover {
+  transform: scale(1.1);
+}
+
+.action-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.nav-menu {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 200;
+}
+
+.nav-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.5);
+}
+
+.nav-content {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 250px;
+  height: 100%;
+  background: #6A2C4A;
+  padding: 2rem 0;
+}
+
+.nav-item {
+  padding: 1rem 2rem;
+  color: white;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  background: rgba(255,255,255,0.1);
+}
+
+.nav-item span {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.match-animation {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.match-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(106, 44, 74, 0.9);
+}
+
+.match-content {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  color: white;
+}
+
+.match-bubbles {
+  position: relative;
+  width: 300px;
+  height: 300px;
+  margin: 0 auto 2rem;
+}
+
+.bubble {
+  position: absolute;
+  font-size: 2rem;
+  animation: float 2s ease-in-out infinite;
+}
+
 .bubble-1 { top: 20%; left: 10%; animation-delay: 0s; }
 .bubble-2 { top: 10%; right: 20%; animation-delay: 0.3s; }
 .bubble-3 { bottom: 30%; left: 5%; animation-delay: 0.6s; }
 .bubble-4 { bottom: 20%; right: 10%; animation-delay: 0.9s; }
 .bubble-5 { top: 50%; left: 50%; transform: translate(-50%, -50%); animation-delay: 1.2s; }
 .bubble-6 { top: 70%; right: 30%; animation-delay: 1.5s; }
-@keyframes float { 0%, 100% { transform: translateY(0px) scale(1) } 50% { transform: translateY(-20px) scale(1.1) } }
-.match-text h2 { font-size: 3rem; margin: 0 0 1rem 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
-.match-text p { font-size: 1.2rem; margin: 0; opacity: 0.9; }
 
-.chat-interface { position: fixed; bottom: 0; right: 0; width: 400px; height: 500px; background: white; border-radius: 20px 20px 0 0; box-shadow: 0 -5px 20px rgba(0,0,0,0.2); z-index: 500; display: flex; flex-direction: column; }
-.chat-header { background: #6A2C4A; color: white; padding: 1rem; display: flex; justify-content: space-between; align-items: center; border-radius: 20px 20px 0 0; }
-.chat-dog-info { display: flex; align-items: center; gap: 0.75rem; }
-.chat-dog-avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
-.chat-dog-info h3 { margin: 0; font-size: 1rem; }
-.chat-dog-info p { margin: 0; font-size: 0.8rem; opacity: 0.8; }
-.close-chat-btn { background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer; padding: 0.25rem; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; }
-.close-chat-btn:hover { background: rgba(255, 255, 255, 0.1); }
-.chat-messages { flex: 1; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
-.message { display: flex; flex-direction: column; }
-.message.own-message { align-items: flex-end; }
-.message-content { max-width: 80%; padding: 0.75rem 1rem; border-radius: 18px; position: relative; }
-.message:not(.own-message) .message-content { background: #f1f3f4; color: #333; }
-.message.own-message .message-content { background: #6A2C4A; color: white; }
-.message-sender { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem; display: block; }
-.message-text { margin: 0 0 0.25rem 0; line-height: 1.4; }
-.message-time { font-size: 0.7rem; opacity: 0.7; }
-.chat-input { padding: 1rem; border-top: 1px solid #e9ecef; display: flex; gap: 0.5rem; align-items: center; }
-.message-input { flex: 1; padding: 0.75rem; border: 1px solid #e9ecef; border-radius: 20px; outline: none; font-size: 0.9rem; }
-.message-input:focus { border-color: #6A2C4A; }
-.send-btn { background: #6A2C4A; color: white; border: none; border-radius: 50%; width: 40px; height: 40px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease; }
-.send-btn:hover:not(:disabled) { background: #5a253e; transform: scale(1.05); }
-.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.send-icon { width: 20px; height: 20px; }
+@keyframes float {
+  0%, 100% { transform: translateY(0px) scale(1) }
+  50% { transform: translateY(-20px) scale(1.1) }
+}
+
+.match-text h2 {
+  font-size: 3rem;
+  margin: 0 0 1rem 0;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+.match-text p {
+  font-size: 1.2rem;
+  margin: 0;
+  opacity: 0.9;
+}
+
+.chat-interface {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  width: 400px;
+  height: 500px;
+  background: white;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -5px 20px rgba(0,0,0,0.2);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header {
+  background: #6A2C4A;
+  color: white;
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-radius: 20px 20px 0 0;
+}
+
+.chat-dog-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.chat-dog-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.chat-dog-info h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.chat-dog-info p {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.close-chat-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-chat-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.message {
+  display: flex;
+  flex-direction: column;
+}
+
+.message.own-message {
+  align-items: flex-end;
+}
+
+.message-content {
+  max-width: 80%;
+  padding: 0.75rem 1rem;
+  border-radius: 18px;
+  position: relative;
+}
+
+.message:not(.own-message) .message-content {
+  background: #f1f3f4;
+  color: #333;
+}
+
+.message.own-message .message-content {
+  background: #6A2C4A;
+  color: white;
+}
+
+.message-sender {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  display: block;
+}
+
+.message-text {
+  margin: 0 0 0.25rem 0;
+  line-height: 1.4;
+}
+
+.message-time {
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+
+.chat-input {
+  padding: 1rem;
+  border-top: 1px solid #e9ecef;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.message-input {
+  flex: 1;
+  padding: 0.75rem;
+  border: 1px solid #e9ecef;
+  border-radius: 20px;
+  outline: none;
+  font-size: 0.9rem;
+}
+
+.message-input:focus {
+  border-color: #6A2C4A;
+}
+
+.send-btn {
+  background: #6A2C4A;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #5a253e;
+  transform: scale(1.05);
+}
+
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.send-icon {
+  width: 20px;
+  height: 20px;
+}
 
 /* Responsive blocks (unchanged) */
 @media (max-width: 428px) { /* ... (omitted for brevity, identical to your original) ... */ }
+
 @media (min-width: 429px) and (max-width: 768px) { /* ... */ }
+
 @media (min-width: 769px) { /* ... */ }
 
-/* Filtering overlays (both variants kept) */
 .filtering-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(106, 44, 74, 0.8); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .filtering-content { text-align: center; color: white; }
 .filtering-spinner { font-size: 3rem; margin-bottom: 1rem; animation: spin 2s linear infinite; }
