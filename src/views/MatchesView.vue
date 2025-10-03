@@ -1,11 +1,20 @@
-<!-- src/views/MatchesView.vue -->
 <template>
   <div class="matches-page">
     <header class="matches-header">
       <h1>Matches</h1>
       <div class="header-actions">
         <button class="btn" @click="goDiscover">Discover</button>
-        <button class="btn danger" @click="clearAll" :disabled="matches.length === 0">Clear All</button>
+        <button class="btn outline" @click="refreshMatches" :disabled="loading">
+          <span v-if="loading">Refreshing...</span>
+          <span v-else>Refresh</span>
+        </button>
+        <button
+          class="btn danger"
+          @click="clearAll"
+          :disabled="matches.length === 0"
+        >
+          Clear All
+        </button>
       </div>
     </header>
 
@@ -24,13 +33,20 @@
         </div>
 
         <div class="info">
-          <h2>{{ m.name }} <span v-if="m.age" class="age">• {{ m.age }}</span></h2>
+          <h2>
+            {{ m.name }}
+            <span v-if="m.age" class="age">• {{ m.age }}</span>
+          </h2>
           <p class="sub">{{ m.breed }} • {{ m.location }}</p>
           <p class="owner" v-if="m.ownerName">Owner: {{ m.ownerName }}</p>
 
           <div class="actions">
-            <button class="btn" @click="router.push({ name: 'messages' })">Message</button>
-            <button class="btn outline" @click="viewProfile(m)">View Profile</button>
+            <button class="btn" @click="router.push({ name: 'messages' })">
+              Message
+            </button>
+            <button class="btn outline" @click="viewProfile(m)">
+              View Profile
+            </button>
           </div>
 
           <div class="time" v-if="m.matchedAt">
@@ -45,50 +61,114 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
+import {
+  collection,
+  getDocs,
+  getDoc,
+  doc,
+  query,
+  where
+} from 'firebase/firestore'
 import { onAuthStateChanged } from 'firebase/auth'
-import { auth } from '../lib/firebase' // ← if you use '@/firebase', change this import
-
-// Keep the same key as DiscoverView
-const MATCHES_KEY = 'demo_matches'
-
-function loadStoredMatches() {
-  try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] }
-}
-function saveStoredMatches(arr) {
-  localStorage.setItem(MATCHES_KEY, JSON.stringify(arr))
-}
+import { auth, db } from '../lib/firebase'
 
 const router = useRouter()
 const matches = ref([])
+const loading = ref(false)
+const currentDogId = ref(null)
+const currentUser = ref(null)
 
 const sortedMatches = computed(() =>
   [...matches.value].sort((a, b) => (b.matchedAt || 0) - (a.matchedAt || 0))
 )
 
-function refreshFromStorage() {
-  matches.value = loadStoredMatches()
+async function fetchMyDogId(userUid) {
+  const q = query(collection(db, 'dogs'), where('ownerId', '==', userUid))
+  const snap = await getDocs(q)
+  if (!snap.empty) return snap.docs[0].id
+  return null
+}
+
+async function fetchReciprocalMatches(myDogId) {
+  const likesByUsSnap = await getDocs(
+    query(collection(db, 'likes'), where('fromDogId', '==', myDogId))
+  )
+  const likedDogIds = likesByUsSnap.docs.map(d => d.data().toDogId)
+  if (likedDogIds.length === 0) return []
+
+  const likesToUsSnap = await getDocs(
+    query(collection(db, 'likes'), where('toDogId', '==', myDogId))
+  )
+  const theirLikes = likesToUsSnap.docs.map(d => d.data().fromDogId)
+  const matchedDogIds = likedDogIds.filter(id => theirLikes.includes(id))
+  if (matchedDogIds.length === 0) return []
+
+  const dogs = []
+  for (const id of matchedDogIds) {
+    const dogSnap = await getDoc(doc(db, 'dogs', id))
+    if (dogSnap.exists()) {
+      const data = dogSnap.data()
+
+      const gallery = Array.isArray(data.gallery) ? data.gallery : []
+      const image =
+        gallery.length > 0 ? gallery[0] : data.image || '/placeholder.png'
+
+      dogs.push({
+        id: dogSnap.id,
+        name: data.name || 'Unnamed',
+        age: data.age || null,
+        breed: data.breed || '',
+        location: data.location || '',
+        ownerName: data.ownerName || data.owner || '',
+        image,
+        gallery,
+        matchedAt: Date.now()
+      })
+    } else {
+      console.warn(`⚠️ Dog profile not found for ID ${id}`)
+    }
+  }
+
+  if (dogs.length === 0) {
+    console.log('⚠️ No reciprocal matches returned any profiles.')
+  }
+  return dogs
+}
+
+async function loadMatches(user) {
+  loading.value = true
+  try {
+    const myDog = await fetchMyDogId(user.uid)
+    currentDogId.value = myDog
+    if (!myDog) {
+      matches.value = []
+      return
+    }
+    matches.value = await fetchReciprocalMatches(myDog)
+  } catch {
+    matches.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+async function refreshMatches() {
+  if (!currentUser.value) return
+  await loadMatches(currentUser.value)
 }
 
 function removeMatch(id) {
-  const next = matches.value.filter(m => m.id !== id)
-  matches.value = next
-  saveStoredMatches(next)
+  matches.value = matches.value.filter(m => m.id !== id)
 }
-
 function clearAll() {
   matches.value = []
-  saveStoredMatches([])
 }
-
 function goDiscover() {
   router.push('/discover')
 }
-
 function viewProfile(m) {
-  // For now, just go to Discover; later you can route to a dog detail page
-  router.push('/discover')
+  router.push({ name: 'dog-profile', params: { id: m.id } })
 }
-
 function timeAgo(ts) {
   const diff = Date.now() - Number(ts)
   const mins = Math.floor(diff / 60000)
@@ -100,52 +180,38 @@ function timeAgo(ts) {
   return `${days}d ago`
 }
 
-function onMatchesUpdated() {
-  refreshFromStorage()
-}
-
-/* ── NEW: Redirect to Home if user signs out ────────────────────────────── */
 let unsubscribeAuth = null
-
 function ensureSignedIn() {
-  // remove any prior listener
-  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null }
-
-  unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-    if (!u) {
-      // Not signed in → go Home immediately
+  if (unsubscribeAuth) {
+    unsubscribeAuth()
+    unsubscribeAuth = null
+  }
+  unsubscribeAuth = onAuthStateChanged(auth, user => {
+    if (!user) {
       router.replace('/')
       return
     }
-    // Signed in → make sure matches list is loaded
-    refreshFromStorage()
+    currentUser.value = user
+    loadMatches(user)
   })
 }
-/* ──────────────────────────────────────────────────────────────────────── */
 
 onMounted(() => {
-  ensureSignedIn() // ← start auth watcher (does the first refresh too if signed in)
-
-  // 1) Custom event from DiscoverView (matches-updated)
-  window.addEventListener('matches-updated', onMatchesUpdated)
-  // 2) Cross-tab/localStorage change
-  window.addEventListener('storage', onMatchesUpdated)
+  ensureSignedIn()
 })
-
 onBeforeUnmount(() => {
-  window.removeEventListener('matches-updated', onMatchesUpdated)
-  window.removeEventListener('storage', onMatchesUpdated)
-  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null } // ← cleanup auth listener
+  if (unsubscribeAuth) {
+    unsubscribeAuth()
+    unsubscribeAuth = null
+  }
 })
 </script>
-
 
 <style scoped>
 .matches-page {
   min-height: 100vh;
   background: #f8f9fa;
 }
-
 .matches-header {
   background: #6A2C4A;
   color: #fff;
@@ -154,12 +220,10 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
 }
-
 .header-actions {
   display: flex;
   gap: .5rem;
 }
-
 .btn {
   background: #fff;
   color: #6A2C4A;
@@ -185,14 +249,12 @@ onBeforeUnmount(() => {
   color: #6A2C4A;
   border-color: #6A2C4A;
 }
-
 .empty-state {
   text-align: center;
   padding: 3rem 1rem;
   color: #666;
 }
 .empty-state .emoji { font-size: 3rem; margin-bottom: .5rem; }
-
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -201,7 +263,6 @@ onBeforeUnmount(() => {
   max-width: 1100px;
   margin: 0 auto;
 }
-
 .card {
   background: #fff;
   border-radius: 14px;
@@ -210,7 +271,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
 }
-
 .image-wrap {
   position: relative;
   aspect-ratio: 4/3;
@@ -233,7 +293,6 @@ onBeforeUnmount(() => {
   background: rgba(0,0,0,.55);
   cursor: pointer;
 }
-
 .info {
   padding: .9rem;
   display: grid;
@@ -246,13 +305,11 @@ onBeforeUnmount(() => {
 .age { color: #666; font-weight: 500; }
 .sub { margin: 0; color: #666; font-size: .95rem; }
 .owner { margin: 0; color: #7a7a7a; font-size: .9rem; }
-
 .actions {
   display: flex;
   gap: .5rem;
   margin-top: .25rem;
 }
-
 .time {
   margin-top: .25rem;
   color: #999;
