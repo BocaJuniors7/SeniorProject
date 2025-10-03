@@ -3,9 +3,7 @@
     <!-- Header -->
     <header class="profile-header">
       <h1>Dog Profiles</h1>
-      <div class="header-actions">
-       
-      </div>
+      <div class="header-actions"></div>
     </header>
 
     <!-- Main Content -->
@@ -59,7 +57,14 @@
           </div>
 
           <!-- Add New Dog Card -->
-          <div class="dog-card add-card" @click="addNewDog">
+          <div
+            class="dog-card add-card"
+            role="button"
+            tabindex="0"
+            @click="addNewDog"
+            @keydown.enter.prevent="addNewDog"
+            @keydown.space.prevent="addNewDog"
+          >
             <div class="add-content">
               <svg class="add-icon" viewBox="0 0 24 24">
                 <path fill="currentColor" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
@@ -289,7 +294,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-// If your alias isn't set, change '@/firebase' -> '../firebase'
 import { auth, db, storage } from '@/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
 import {
@@ -362,9 +366,258 @@ const calculateAge = () => {
 }
 const updateWeight = () => { dogProfile.weight = `${dogProfile.weightValue} pounds` }
 
-/* ---------- Firestore + profile logic (unchanged) ---------- */
-/* ... keep all your addNewDog, editDog, previewDog, saveProfile, fetchDogs,
-   deleteDogById, choosePhotos, onFilesSelected, removePhoto, handleDrop etc. exactly as you have them ... */
+/* ---------- Add/Edit/Preview ---------- */
+const resetDogProfile = () => {
+  Object.assign(dogProfile, {
+    name: '',
+    breed: '',
+    sex: 'male',
+    age: '',
+    birthday: '',
+    weight: '',
+    weightValue: 50,
+    temperament: '',
+    location: '',
+    trainingLevel: '',
+    certifications: [],
+    trainingNotes: '',
+    lookingFor: '',
+    preferredBreeds: '',
+    minAgePref: '',
+    maxAgePref: '',
+    travelDistance: '50'
+  })
+  photos.value = []
+}
+
+const addNewDog = () => {
+  editingProfile.value = { id: null, name: 'New Dog' } // lazy ID: created on first save/upload
+  resetDogProfile()
+  activeTab.value = 'basic'
+}
+
+const editDog = (dog: any) => {
+  editingProfile.value = { id: dog.id ?? null, name: dog.name }
+  Object.assign(dogProfile, {
+    ...dog,
+    sex: dog.sex === 'F' ? 'female' : (dog.sex === 'M' ? 'male' : (dog.sex || 'male'))
+  })
+  photos.value = (dog.gallery && dog.gallery.length ? dog.gallery : dog.photos) || []
+  activeTab.value = 'basic'
+}
+
+const previewDog = (dog: any) => {
+  previewDogData.value = dog
+  previewPhotos.value = (dog.gallery && dog.gallery.length ? dog.gallery : dog.photos) || []
+  showPreview.value = true
+}
+
+/* ---------- Firestore helpers ---------- */
+const dogDocRef = () => {
+  if (!currentUser.value) throw new Error('Not signed in')
+  if (!editingProfile.value) throw new Error('No dog selected')
+  if (!editingProfile.value.id) throw new Error('No dog id yet')
+  return doc(db, 'dogs', editingProfile.value.id)
+}
+
+/** Create a Firestore doc if this draft doesn't have an ID yet. */
+const ensureDogDocId = async () => {
+  if (!currentUser.value) throw new Error('Not signed in')
+  if (editingProfile.value?.id) return editingProfile.value.id
+  const basePayload: any = {
+    ownerId: currentUser.value.uid,
+    name: dogProfile.name || 'Untitled',
+    sex: dogProfile.sex === 'female' ? 'F' : 'M',
+    breed: dogProfile.breed || '',
+    gallery: [],
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  }
+  const ref = await addDoc(collection(db, 'dogs'), basePayload)
+  editingProfile.value = { id: ref.id, name: basePayload.name }
+  return ref.id
+}
+
+/* ---------- Save create/update ---------- */
+const saveProfile = async () => {
+  try {
+    if (!currentUser.value) throw new Error('Sign in to save')
+    saving.value = true
+
+    // Make sure we have an ID if this is a new draft
+    const id = editingProfile.value?.id ?? await ensureDogDocId()
+
+    const payload: any = {
+      ownerId: currentUser.value.uid,
+      name: dogProfile.name || 'Untitled',
+      sex: dogProfile.sex === 'female' ? 'F' : 'M',
+      breed: dogProfile.breed || '',
+      age: dogProfile.age || '',
+      birthday: dogProfile.birthday || '',
+      weight: dogProfile.weight || '',
+      weightValue: dogProfile.weightValue || 50,
+      temperament: dogProfile.temperament || '',
+      location: dogProfile.location || '',
+      trainingLevel: dogProfile.trainingLevel || '',
+      certifications: dogProfile.certifications || [],
+      trainingNotes: dogProfile.trainingNotes || '',
+      lookingFor: dogProfile.lookingFor || '',
+      preferredBreeds: dogProfile.preferredBreeds || '',
+      minAgePref: dogProfile.minAgePref || '',
+      maxAgePref: dogProfile.maxAgePref || '',
+      travelDistance: dogProfile.travelDistance || '50',
+      gallery: photos.value,
+      updatedAt: serverTimestamp()
+    }
+
+    await setDoc(doc(db, 'dogs', id), payload, { merge: true })
+
+    await fetchDogs()
+    editingProfile.value = null
+  } catch (e) {
+    console.error('saveProfile error', e)
+    alert('Failed to save profile. Check console for details.')
+  } finally {
+    saving.value = false
+  }
+}
+
+/* ---------- Load dogs owned by the current user ---------- */
+const fetchDogs = async () => {
+  if (!currentUser.value) return
+  try {
+    const q = query(collection(db, 'dogs'), where('ownerId', '==', currentUser.value.uid))
+    const snap = await getDocs(q)
+    userDogs.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  } catch (e) {
+    console.error('fetchDogs error', e)
+  }
+}
+
+/* ---------- Delete profile ---------- */
+async function deleteDogById(id: string) {
+  if (!currentUser.value) return
+  const ok = confirm('Delete this dog profile? This cannot be undone.')
+  if (!ok) return
+
+  try {
+    deletingId.value = id
+
+    // 1) Read the doc to find gallery/photos to delete from Storage
+    const dref = doc(db, 'dogs', id)
+    const snap = await getDoc(dref)
+    if (snap.exists()) {
+      const data: any = snap.data()
+      const urls: string[] = [...(data.gallery || []), ...(data.photos || [])]
+      // Best-effort delete storage files; ignore failures (could be external URLs)
+      for (const url of urls) {
+        try {
+          const objRef = sRef(storage, url) // ref can take a full https URL
+          await deleteObject(objRef)
+        } catch (_) { /* ignore */ }
+      }
+    }
+
+    // 2) Delete the Firestore doc
+    await deleteDoc(dref)
+
+    // 3) Update local state
+    userDogs.value = userDogs.value.filter(d => d.id !== id)
+    if (editingProfile.value?.id === id) {
+      editingProfile.value = null
+      resetDogProfile()
+    }
+
+  } catch (e) {
+    console.error('deleteDogById error', e)
+    alert('Failed to delete profile. Check console for details.')
+  } finally {
+    deletingId.value = null
+  }
+}
+
+const deleteCurrentDog = async () => {
+  if (!editingProfile.value?.id) return
+  await deleteDogById(editingProfile.value.id)
+}
+
+/* ---------- Uploads ---------- */
+const choosePhotos = () => fileInput.value?.click()
+
+const onFilesSelected = async (e: any) => {
+  const input = e.target
+  if (!input.files || input.files.length === 0) return
+  if (!currentUser.value) { alert('Please sign in to upload photos'); return }
+
+  uploading.value = true
+  uploadProgress.value = 0
+
+  try {
+    // Ensure we have a Firestore doc for this draft (lazy create)
+    const id = await ensureDogDocId()
+
+    for (const file of Array.from(input.files as FileList)) {
+      const path = `dogs/${currentUser.value.uid}/${id}/gallery/${Date.now()}_${file.name}`
+      const storageRef = sRef(storage, path)
+      const task = uploadBytesResumable(storageRef, file, { contentType: file.type })
+
+      await new Promise<string>((resolve, reject) => {
+        task.on(
+          'state_changed',
+          (snap) => { uploadProgress.value = Math.round((snap.bytesTransferred / snap.totalBytes) * 100) },
+          (err) => reject(err),
+          async () => {
+            try {
+              const url = await getDownloadURL(task.snapshot.ref)
+              await updateDoc(doc(db, 'dogs', id), { gallery: arrayUnion(url), updatedAt: serverTimestamp() })
+              photos.value.push(url)
+              resolve(url)
+            } catch (err) { reject(err as any) }
+          }
+        )
+      })
+    }
+  } catch (err) {
+    console.error('Upload failed', err)
+    alert('Upload failed. Check console for details.')
+  } finally {
+    uploading.value = false
+    uploadProgress.value = 0
+    if (fileInput.value) fileInput.value.value = ''
+  }
+}
+
+const removePhoto = async (url: string) => {
+  if (!currentUser.value || !editingProfile.value?.id) return
+  try {
+    const objectRef = sRef(storage, url)
+    await deleteObject(objectRef).catch(() => {})
+  } catch (_) { /* ignore */ }
+
+  try {
+    const id = editingProfile.value.id
+    const snap = await getDoc(doc(db, 'dogs', id))
+    if (snap.exists()) {
+      const data = snap.data() as any
+      const next = (data.gallery || []).filter((u: string) => u !== url)
+      await updateDoc(doc(db, 'dogs', id), { gallery: next, updatedAt: serverTimestamp() })
+    }
+  } catch (e) {
+    console.error('removePhoto error', e)
+  } finally {
+    photos.value = photos.value.filter(u => u !== url)
+  }
+}
+
+const handleDrop = (e: DragEvent) => {
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (!files.length) return
+  onFilesSelected({ target: { files } })
+}
+
+/* ---------- Preview handlers ---------- */
+const handleLike = () => { showPreview.value = false }
+const handlePass = () => { showPreview.value = false }
 
 /* ---------- Navigation ---------- */
 const goToDiscover = () => { router.push('/discover'); showMenu.value = false }
@@ -379,7 +632,7 @@ onMounted(async () => {
     if (!u) {
       currentUser.value = null
       userDogs.value = []
-      router.replace('/')   // 🚨 bounce home if signed out
+      router.replace('/')   // bounce home if signed out
     } else {
       currentUser.value = { uid: u.uid }
       await fetchDogs()
@@ -391,7 +644,6 @@ onUnmounted(() => {
   if (unsubscribeAuth) unsubscribeAuth()
 })
 </script>
-
 
 <style scoped>
 .profile-page { min-height: 100vh; background: #f8f9fa; }
@@ -438,7 +690,7 @@ onUnmounted(() => {
 .save-btn { background: white; color: #6A2C4A; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
 .save-btn:hover:enabled { background: #f8f9fa; transform: translateY(-1px); }
 .save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.danger-btn { background: #fff0f0; color: #fff; color: #c0392b; border: 1px solid #f5c6cb; padding: 0.6rem 1rem; border-radius: 8px; font-weight: 700; }
+.danger-btn { background: #fff0f0; color: #c0392b; border: 1px solid #f5c6cb; padding: 0.6rem 1rem; border-radius: 8px; font-weight: 700; }
 
 .tab-navigation { background: #e9ecef; display: flex; padding: 0 2rem; border-bottom: 1px solid #dee2e6; }
 .tab-btn { background: none; border: none; padding: 1rem 1.5rem; cursor: pointer; color: #6c757d; font-weight: 500; border-bottom: 3px solid transparent; transition: all 0.3s; }
@@ -491,6 +743,9 @@ onUnmounted(() => {
 .nav-item { padding: 1rem 2rem; color: white; cursor: pointer; transition: background-color 0.3s; }
 .nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.1); }
 .nav-item span { font-size: 1.1rem; font-weight: 500; }
+
+.dog-card.add-card { cursor: pointer; outline: none; }
+.dog-card.add-card:focus { box-shadow: 0 0 0 3px rgba(106,44,74,.25); }
 
 @media (max-width: 768px) {
   .main-content { padding: 1rem; }
