@@ -1,6 +1,7 @@
+<!-- src/views/DiscoverView.vue -->
 <template>
   <div class="discover-page" v-cloak>
-    <!-- Profile gate cover (only after check completes and user has no profile) -->
+    <!-- Profile gate (only after check completes and user has no profile) -->
     <div
       v-if="!checkingProfile && hasProfile === false"
       class="profile-gate"
@@ -19,15 +20,21 @@
       <!-- Header -->
       <header class="discover-header">
         <h1>Discover Dogs</h1>
+
         <div class="header-actions">
+          <!-- NEW: Active dog selector -->
+          <div class="active-dog-select" v-if="myDogs.length">
+            <label for="activeDog" class="sr-only">Choose your dog</label>
+            <select id="activeDog" v-model="activeDogId" class="dog-select">
+              <option v-for="d in myDogs" :key="d.id" :value="d.id">
+                {{ d.name || 'Unnamed' }}
+              </option>
+            </select>
+          </div>
+
           <button @click="toggleFilters" class="filter-btn">
             <svg class="filter-icon" viewBox="0 0 24 24">
               <path fill="currentColor" d="M3 17h18v-2H3v2zm0-5h18V7H3v5zm0-7v2h18V5H3z"/>
-            </svg>
-          </button>
-          <button @click="toggleMenu" class="menu-btn">
-            <svg class="menu-icon" viewBox="0 0 24 24">
-              <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
             </svg>
           </button>
         </div>
@@ -83,8 +90,8 @@
           <button @click="resetFilters" class="btn btn-primary">Reset Filters</button>
         </div>
 
-        <div 
-          v-for="(dog, index) in dogs" 
+        <div
+          v-for="(dog, index) in dogs"
           :key="dog.id"
           :class="['dog-card', { 'active': index === 0 }]"
           :style="{ zIndex: dogs.length - index, '--offset': cardOffset + 'px', '--rotation': (cardOffset/20) + 'deg' }"
@@ -110,7 +117,6 @@
           </div>
 
           <div class="card-details">
-            <!-- Basic Info Section -->
             <div class="info-section">
               <div class="detail-row">
                 <span class="label">Sex:</span>
@@ -122,13 +128,11 @@
               </div>
             </div>
 
-            <!-- About Section -->
             <div v-if="dog.temperament" class="content-section">
               <h4>About {{ dog.name }}</h4>
               <p class="temperament">{{ dog.temperament }}</p>
             </div>
 
-            <!-- Training & Certifications Section -->
             <div v-if="hasTrainingInfo(dog)" class="content-section">
               <h4>Training & Certifications</h4>
               <div v-if="dog.trainingLevel" class="training-level">
@@ -148,7 +152,6 @@
               </div>
             </div>
 
-            <!-- Medical Papers Section -->
             <div v-if="dog.medicalPapers && dog.medicalPapers.length > 0" class="content-section">
               <h4>Health Certifications</h4>
               <div class="medical-papers">
@@ -162,7 +165,6 @@
               </div>
             </div>
 
-            <!-- Preferences Section -->
             <div v-if="hasPreferences(dog)" class="content-section">
               <h4>Breeding Preferences</h4>
               <div v-if="dog.lookingFor" class="preference-item">
@@ -188,12 +190,12 @@
 
       <!-- Action Buttons -->
       <div class="action-buttons">
-        <button @click="passDog" class="action-btn pass-btn">
+        <button @click="passDog" class="action-btn pass-btn" :disabled="!activeDogId">
           <svg class="action-icon" viewBox="0 0 24 24">
             <path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
           </svg>
         </button>
-        <button @click="likeDog" class="action-btn like-btn">
+        <button @click="likeDog" class="action-btn like-btn" :disabled="!activeDogId || dogs.length===0">
           <svg class="action-icon" viewBox="0 0 24 24">
             <path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
           </svg>
@@ -219,7 +221,7 @@
         </div>
       </div>
 
-      <!-- Chat Interface -->
+      <!-- Chat Interface (demo) -->
       <div v-if="showChat" class="chat-interface">
         <div class="chat-header">
           <div class="chat-dog-info">
@@ -231,10 +233,10 @@
           </div>
           <button @click="closeChat" class="close-chat-btn">×</button>
         </div>
-        
+
         <div class="chat-messages">
-          <div 
-            v-for="message in chatMessages" 
+          <div
+            v-for="message in chatMessages"
             :key="message.id"
             :class="['message', { 'own-message': message.sender === 'You' }]"
           >
@@ -245,10 +247,10 @@
             </div>
           </div>
         </div>
-        
+
         <div class="chat-input">
-          <input 
-            v-model="newMessage" 
+          <input
+            v-model="newMessage"
             @keyup.enter="sendMessage"
             placeholder="Type a message..."
             class="message-input"
@@ -265,18 +267,10 @@
       <div v-if="showMenu" class="nav-menu">
         <div class="nav-overlay" @click="toggleMenu"></div>
         <div class="nav-content">
-          <div class="nav-item" @click="goToProfile">
-            <span>Profile</span>
-          </div>
-          <div class="nav-item active" @click="toggleMenu">
-            <span>Discover Dogs</span>
-          </div>
-          <div class="nav-item" @click="goToMatches">
-            <span>Matches</span>
-          </div>
-          <div class="nav-item" @click="goToSettings">
-            <span>Settings</span>
-          </div>
+          <div class="nav-item" @click="goToProfile"><span>Profile</span></div>
+          <div class="nav-item active" @click="toggleMenu"><span>Discover Dogs</span></div>
+          <div class="nav-item" @click="goToMatches"><span>Matches</span></div>
+          <div class="nav-item" @click="goToSettings"><span>Settings</span></div>
         </div>
       </div>
 
@@ -297,7 +291,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue' // >>> added watch
 import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
 import { createLike } from '../services/likes'
@@ -339,7 +333,56 @@ const filters = reactive({
   distance: '25'
 })
 
-// ---------- Auth/Profile Gate ----------
+/* ---------------- My dogs + active dog selector ---------------- */
+const myDogs = ref([])          // [{id, name, image}]
+const activeDogId = ref('')     // id of the dog that will be used as fromDogId
+const activeDog = computed(() => myDogs.value.find(d => d.id === activeDogId.value) || null)
+
+async function fetchMyDogs() {
+  if (!currentUser.value?.uid) return
+  const q = query(collection(db, 'dogs'), where('ownerId', '==', currentUser.value.uid))
+  const snap = await getDocs(q)
+  myDogs.value = snap.docs.map(d => {
+    const data = d.data()
+    return {
+      id: d.id,
+      name: data.name || 'Unnamed',
+      image: Array.isArray(data.gallery) && data.gallery.length ? data.gallery[0] :
+             Array.isArray(data.photos) && data.photos.length ? (typeof data.photos[0] === 'string' ? data.photos[0] : data.photos[0]?.url || '') : ''
+    }
+  })
+  // Default to first dog if none selected
+  if (!activeDogId.value && myDogs.value.length) activeDogId.value = myDogs.value[0].id
+}
+
+/* ---------------- Per-dog dismissed/progress (local) ---------------- */
+// >>> NEW: keep independent progress per (user, activeDogId)
+const DISMISSED_PREFIX = 'discover_dismissed_v1'
+
+function dismissedKey() {
+  if (!currentUser.value?.uid || !activeDogId.value) return ''
+  return `${DISMISSED_PREFIX}:${currentUser.value.uid}:${activeDogId.value}`
+}
+function loadDismissed() {
+  const k = dismissedKey()
+  if (!k) return []
+  try { return JSON.parse(localStorage.getItem(k) || '[]') } catch { return [] }
+}
+function saveDismissed(arr) {
+  const k = dismissedKey()
+  if (!k) return
+  localStorage.setItem(k, JSON.stringify(arr))
+}
+function markDismissed(dogId) {
+  if (!dogId) return
+  const arr = loadDismissed()
+  if (!arr.includes(dogId)) {
+    arr.push(dogId)
+    saveDismissed(arr)
+  }
+}
+
+/* ---------------- Auth/Profile Gate ---------------- */
 async function ensureProfileExists () {
   checkingProfile.value = true
   hasProfile.value = false
@@ -356,6 +399,10 @@ async function ensureProfileExists () {
   const snap = await getDocs(qRef)
   hasProfile.value = !snap.empty
   checkingProfile.value = false
+
+  if (hasProfile.value) {
+    await fetchMyDogs()
+  }
   return hasProfile.value
 }
 
@@ -374,7 +421,7 @@ onUnmounted(() => {
   if (offAuth) { offAuth(); offAuth = null }
 })
 
-// ---------- Helpers ----------
+/* ---------------- Helpers ---------------- */
 const certDisplay = (cert) => {
   const certMap = {
     'akc': 'AKC Registered',
@@ -404,7 +451,7 @@ const toggleFilters = () => { showFilters.value = !showFilters.value }
 const toggleMenu = () => { showMenu.value = !showMenu.value }
 const goToProfileCreate = () => router.push('/profile?create=1')
 
-// ---------- Geocoding & distance ----------
+/* ---------------- Geocoding & distance ---------------- */
 const geocodeAddress = async (address) => {
   try {
     const response = await fetch(
@@ -434,7 +481,7 @@ const calculateDistance = (userLocation, dogLocation) => {
   return Math.round(R * c * 10) / 10
 }
 
-// ---------- Image normalization ----------
+/* ---------------- Image normalization ---------------- */
 function firstPhotoUrl(d) {
   if (Array.isArray(d && d.gallery) && d.gallery.length) return d.gallery[0]
   if (Array.isArray(d && d.photos) && d.photos.length) {
@@ -459,7 +506,7 @@ function normalizePhotoArray(d) {
   return []
 }
 
-// ---------- Map Firestore doc to card ----------
+/* ---------------- Map Firestore doc to card ---------------- */
 function mapDogDocToCard(d) {
   const ageYears = d.age ?? (d.birthdate
     ? Math.max(0, Math.floor((Date.now() - new Date(d.birthdate).getTime()) / (365.25 * 24 * 3600 * 1000)))
@@ -492,12 +539,15 @@ function mapDogDocToCard(d) {
   }
 }
 
-// ---------- Load & Filter ----------
+/* ---------------- Load & Filter ---------------- */
 async function loadDogs() {
   isFiltering.value = true
   try {
     const docs = await listDogs({ onlyWithPhotos: false, max: 50, breed: filters.breed || undefined })
-    dogs.value = excludeMyDogs(docs.map(mapDogDocToCard))
+    // >>> filter out already dismissed for the current active dog
+    const dismissed = new Set(loadDismissed())
+    const base = excludeMyDogs(docs.map(mapDogDocToCard))
+    dogs.value = base.filter(d => !dismissed.has(d.id))
   } catch (e) {
     console.error(e)
     filterError.value = 'Failed to load dogs'
@@ -542,6 +592,10 @@ const applyFilters = async () => {
       filteredDogs = out
     }
 
+    // >>> filter out cards dismissed for current active dog
+    const dismissed = new Set(loadDismissed())
+    filteredDogs = filteredDogs.filter(d => !dismissed.has(d.id))
+
     dogs.value = filteredDogs
   } catch (error) {
     console.error('Error applying filters:', error)
@@ -559,9 +613,14 @@ const resetFilters = () => {
   loadDogs()
 }
 
-const passDog = () => { if (dogs.value.length > 0) dogs.value.shift() }
+/* ---------------- Deck actions ---------------- */
+const passDog = () => {
+  if (dogs.value.length === 0) return
+  const d = dogs.value.shift()
+  if (d) markDismissed(d.id) // >>> remember the dismissal for this active dog
+}
 
-// ---------- Matches (local demo) ----------
+/* ---------------- Matches (local demo) ---------------- */
 const MATCHES_KEY = 'demo_matches'
 function loadStoredMatches() { try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] } }
 function saveStoredMatches(arr) { localStorage.setItem(MATCHES_KEY, JSON.stringify(arr)) }
@@ -574,14 +633,29 @@ function addMatchToStorage(dog) {
   }
 }
 
+/* ---------------- Like / Match ---------------- */
 const likeDog = async () => {
   if (dogs.value.length === 0) return
+  if (!activeDogId.value) {
+    alert('Choose which of your dogs is liking first.')
+    return
+  }
+
   const likedDog = dogs.value.shift()
+  if (likedDog) markDismissed(likedDog.id) // >>> mark as handled in this deck
+
   try {
-    await createLike({ toDogId: likedDog.id, toDogOwnerId: likedDog.ownerId })
+    // include the activeDogId as fromDogId
+    await createLike({
+      toDogId: likedDog.id,
+      toDogOwnerId: likedDog.ownerId,
+      fromDogId: activeDogId.value
+    })
   } catch (e) {
     console.error('Like failed:', e)
   }
+
+  // demo match logic (unchanged)
   const isMatch = checkForMatch(likedDog)
   if (isMatch) {
     matches.value.push(likedDog)
@@ -600,6 +674,7 @@ const likeDog = async () => {
 }
 
 const checkForMatch = (dog) => {
+  // demo logic; replace with real server-side matching later
   const tangoBreed = 'Golden Retriever'
   const tangoSex = 'male'
   const tangoAge = 3
@@ -608,7 +683,16 @@ const checkForMatch = (dog) => {
          Math.abs(Number(dog.age) - tangoAge) <= 1
 }
 
-// ---------- Drag handlers ----------
+/* ---------------- React when switching active dog ---------------- */
+// >>> When the user selects a different of their dogs, reload the deck for that dog
+watch(activeDogId, async (newId, oldId) => {
+  if (!newId || newId === oldId) return
+  isDragging.value = false
+  cardOffset.value = 0
+  await loadDogs()
+})
+
+/* ---------------- Drag handlers ---------------- */
 const handleTouchStart = (e) => { isDragging.value = true; startX.value = e.touches[0].clientX }
 const handleTouchMove  = (e) => { if (!isDragging.value) return; currentX.value = e.touches[0].clientX; cardOffset.value = currentX.value - startX.value }
 const handleTouchEnd   = () => { if (!isDragging.value) return; isDragging.value = false; if (Math.abs(cardOffset.value) > 100) { cardOffset.value > 0 ? likeDog() : passDog() } cardOffset.value = 0 }
@@ -616,12 +700,12 @@ const handleMouseDown  = (e) => { isDragging.value = true; startX.value = e.clie
 const handleMouseMove  = (e) => { if (!isDragging.value) return; currentX.value = e.clientX; cardOffset.value = currentX.value - startX.value }
 const handleMouseUp    = () => { if (!isDragging.value) return; isDragging.value = false; if (Math.abs(cardOffset.value) > 100) { cardOffset.value > 0 ? likeDog() : passDog() } cardOffset.value = 0 }
 
-// ---------- Nav ----------
+/* ---------------- Nav ---------------- */
 const goToProfile = () => { router.push('/profile'); showMenu.value = false }
 const goToMatches = () => { router.push('/matches'); showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 
-// ---------- Chat ----------
+/* ---------------- Chat (demo) ---------------- */
 const sendMessage = () => {
   if (!newMessage.value.trim()) return
   chatMessages.value.push({ id: Date.now(), sender: 'You', message: newMessage.value, timestamp: new Date() })
@@ -653,6 +737,38 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   position: relative;
 }
+
+/* Header + Active dog selector */
+.discover-header {
+  background: #6A2C4A;
+  color: white;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.discover-header h1 { font-size: 1.5rem; margin: 0; }
+.header-actions { display: flex; gap: 0.75rem; align-items: center; }
+
+.active-dog-select { display: flex; align-items: center; }
+.dog-select {
+  appearance: none;
+  background: white;
+  color: #6A2C4A;
+  border: none;
+  border-radius: 999px;
+  padding: .45rem .9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+.filter-btn { background: none; border: none; color: white; cursor: pointer; padding: 0.5rem; border-radius: 50%; transition: background-color 0.3s ease; }
+.filter-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.filter-icon { width: 24px; height: 24px; }
 
 /* Profile gate overlay */
 .profile-gate {
@@ -698,24 +814,6 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
   color: #6A2C4A;
   font-weight: 600;
 }
-
-.discover-header {
-  background: #6A2C4A;
-  color: white;
-  padding: 1rem 2rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
-
-.discover-header h1 { font-size: 1.5rem; margin: 0; }
-.header-actions { display: flex; gap: 1rem; align-items: center; }
-.filter-btn, .menu-btn { background: none; border: none; color: white; cursor: pointer; padding: 0.5rem; border-radius: 50%; transition: background-color 0.3s ease; }
-.filter-btn:hover, .menu-btn:hover { background: rgba(255, 255, 255, 0.1); }
-.filter-icon, .menu-icon { width: 24px; height: 24px; }
 
 .filters-panel {
   background: white;
@@ -791,26 +889,22 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 .label { font-weight: 600; color: #666; }
 .value { color: #333; }
 
-/* New profile sections */
 .info-section { margin-bottom: 1rem; }
 .content-section { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #f0f0f0; }
 .content-section:last-child { border-bottom: none; }
 .content-section h4 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; color: #333; }
 .temperament { margin: 0; line-height: 1.4; color: #555; font-size: 0.9rem; }
 
-/* Training section */
 .training-level, .certifications, .training-notes { margin-bottom: 0.75rem; }
 .cert-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
 .cert-badge { background: #6A2C4A; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 500; }
 
-/* Medical papers */
 .medical-papers { display: flex; flex-direction: column; gap: 0.5rem; }
 .paper-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
 .paper-info { display: flex; flex-direction: column; gap: 0.1rem; }
 .paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
 .paper-date { font-size: 0.7rem; color: #666; }
 
-/* Preferences */
 .preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
 .preference-item .label { font-size: 0.8rem; }
 .preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
@@ -818,7 +912,6 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 .no-dogs { text-align: center; color: #666; }
 .no-dogs-icon { font-size: 4rem; margin-bottom: 1rem; }
 
-/* Actions */
 .action-buttons {
   position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
   display: flex; gap: 2rem; z-index: 50;
@@ -831,21 +924,19 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 .pass-btn { background: #ff4757; color: white; }
 .like-btn { background: #2ed573; color: white; }
 .action-btn:hover { transform: scale(1.1); }
+.action-btn:disabled { opacity: .5; cursor: not-allowed; }
 .action-icon { width: 24px; height: 24px; }
 
-/* Nav menu */
 .nav-menu { position: fixed; top: 0; right: 0; width: 100%; height: 100%; z-index: 200; }
 .nav-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); }
 .nav-content { position: absolute; top: 0; right: 0; width: 250px; height: 100%; background: #6A2C4A; padding: 2rem 0; }
 .nav-item { padding: 1rem 2rem; color: white; cursor: pointer; transition: background-color 0.3s ease; }
 .nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.1); }
 
-/* Match animation, Chat, Filtering overlay — unchanged */
 .match-animation { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1000; display: flex; align-items: center; justify-content: center; }
 .match-overlay { position: absolute; inset: 0; background: rgba(106, 44, 74, 0.9); }
 .match-content { position: relative; z-index: 1; text-align: center; color: white; }
 .bubble { position: absolute; font-size: 2rem; animation: float 2s ease-in-out infinite; }
 @keyframes float { 0%, 100% { transform: translateY(0px) scale(1) } 50% { transform: translateY(-20px) scale(1.1) } }
 .chat-interface { position: fixed; bottom: 0; right: 0; width: 400px; height: 500px; background: white; border-radius: 20px 20px 0 0; box-shadow: 0 -5px 20px rgba(0,0,0,0.2); z-index: 500; display: flex; flex-direction: column; }
-/* ...rest unchanged for brevity... */
 </style>
