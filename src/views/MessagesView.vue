@@ -104,6 +104,8 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { onAuthStateChanged } from 'firebase/auth'
+import { auth } from '../lib/firebase' // ← change to '@/firebase' if that's your alias
 
 const router = useRouter()
 
@@ -228,16 +230,35 @@ function onStorageChange(e) {
   }
 }
 
+/* ── NEW: Redirect to Home if user signs out ────────────────────────────── */
+let unsubscribeAuth = null
+function ensureSignedIn() {
+  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null }
+  unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+    if (!u) {
+      router.replace('/') // not signed in → bounce to Home
+      return
+    }
+    // signed in → ensure UI is hydrated
+    refreshTick.value++
+  })
+}
+/* ──────────────────────────────────────────────────────────────────────── */
+
 onMounted(() => {
+  ensureSignedIn() // start auth watcher
+
   window.addEventListener('matches-updated', onMatchesUpdated)
   window.addEventListener('storage', onStorageChange)
-  // open first conversation automatically
+
+  // open first conversation automatically (if any)
   const first = conversations.value[0]
   if (first) openConversation(first.key)
 })
 onUnmounted(() => {
   window.removeEventListener('matches-updated', onMatchesUpdated)
   window.removeEventListener('storage', onStorageChange)
+  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null } // cleanup
 })
 
 /* Nav + header */
@@ -247,6 +268,7 @@ const goToProfile  = () => { router.push('/profile');  showMenu.value = false }
 const goToMatches  = () => { router.push('/matches');  showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 </script>
+
 
 <style scoped>
 .messages-page { min-height: 100vh; background: #f8f9fa; }

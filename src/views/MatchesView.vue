@@ -45,7 +45,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
-
+import { onAuthStateChanged } from 'firebase/auth'
+import { auth } from '../lib/firebase' // ← if you use '@/firebase', change this import
 
 // Keep the same key as DiscoverView
 const MATCHES_KEY = 'demo_matches'
@@ -103,8 +104,28 @@ function onMatchesUpdated() {
   refreshFromStorage()
 }
 
+/* ── NEW: Redirect to Home if user signs out ────────────────────────────── */
+let unsubscribeAuth = null
+
+function ensureSignedIn() {
+  // remove any prior listener
+  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null }
+
+  unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+    if (!u) {
+      // Not signed in → go Home immediately
+      router.replace('/')
+      return
+    }
+    // Signed in → make sure matches list is loaded
+    refreshFromStorage()
+  })
+}
+/* ──────────────────────────────────────────────────────────────────────── */
+
 onMounted(() => {
-  refreshFromStorage()
+  ensureSignedIn() // ← start auth watcher (does the first refresh too if signed in)
+
   // 1) Custom event from DiscoverView (matches-updated)
   window.addEventListener('matches-updated', onMatchesUpdated)
   // 2) Cross-tab/localStorage change
@@ -114,8 +135,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('matches-updated', onMatchesUpdated)
   window.removeEventListener('storage', onMatchesUpdated)
+  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null } // ← cleanup auth listener
 })
 </script>
+
 
 <style scoped>
 .matches-page {
