@@ -493,6 +493,37 @@ function mapDogDocToCard(d) {
 }
 
 // ---------- Load & Filter ----------
+
+// todo
+// load profiles in chunks from firebase queue
+// implement python script for ML queue sorting
+//    done periodically outside of user session
+//    maybe each night or each couple nights if made into automation
+//    likely behind paywall since itll be quite resource intensive if ALL users have it run
+//    for demo it will be free
+// toggle for default "random" or "ML sorted" queue
+// move geocoding from discover to profileview save
+//    if location stored is different from location being saved
+//    or if coords are missing
+//        use geocoding to get coords and store in profile
+//    otherwise skip geocoding
+//    check for this in filter for distance
+
+// matching logic
+// render profile from queue
+//
+// need load to use either our random or ml queue
+//
+// if we like that profile
+//    if they like our dog
+//       play match animation
+//       start message conversation
+//    else
+//       add their profile id to our list of likes
+// if skip
+//    add profile id to our list of skips
+// render next profile from queue
+
 async function loadDogs() {
   isFiltering.value = true
   try {
@@ -578,7 +609,7 @@ const likeDog = async () => {
   if (dogs.value.length === 0) return
   const likedDog = dogs.value.shift()
   try {
-    await createLike({ toDogId: likedDog.id, toDogOwnerId: likedDog.ownerId })
+    await createLike({ toDogId: likedDog.id, toDogOwnerId: likedDog.ownerId , fromDogId: null })
   } catch (e) {
     console.error('Like failed:', e)
   }
@@ -599,6 +630,7 @@ const likeDog = async () => {
   }
 }
 
+// update from hardcoded to checking db for match
 const checkForMatch = (dog) => {
   const tangoBreed = 'Golden Retriever'
   const tangoSex = 'male'
@@ -630,17 +662,7 @@ const sendMessage = () => {
     chatMessages.value.push({ id: Date.now() + 1, sender: matchedDog.value.ownerName, message: getRandomResponse(), timestamp: new Date() })
   }, 2000)
 }
-const getRandomResponse = () => {
-  const responses = [
-    "That's wonderful! When would be a good time to meet?",
-    "I'm so excited! Tango sounds like a perfect match for my dog.",
-    "Do you have any questions about her health records?",
-    "She loves playing fetch and going on long walks!",
-    "I can send you more photos if you'd like to see them.",
-    "She's been socialized with other dogs since she was a puppy."
-  ]
-  return responses[Math.floor(Math.random() * responses.length)]
-}
+
 const closeChat = () => { showChat.value = false; matchedDog.value = null; chatMessages.value = [] }
 const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 </script>
