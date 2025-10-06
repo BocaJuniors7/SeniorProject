@@ -3,6 +3,17 @@
     <!-- Header -->
     <header class="page-header">
       <h1>Messages</h1>
+
+      <!-- Active-dog switcher -->
+      <div class="chat-as" v-if="myDogs.length">
+        <label for="chatAs">Chat as:</label>
+        <select id="chatAs" v-model="currentDogId">
+          <option v-for="d in myDogs" :key="d.id" :value="d.id">
+            {{ d.name || 'Unnamed' }}
+          </option>
+        </select>
+      </div>
+
       <button @click="toggleMenu" class="menu-btn">
         <svg class="menu-icon" viewBox="0 0 24 24">
           <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
@@ -51,18 +62,23 @@
               <p>{{ selectedDog.ownerName }}</p>
             </div>
           </div>
+
+          <!-- Preview button -->
+          <div class="chat-actions" v-if="selectedDog">
+            <button class="preview-btn" @click="openProfilePreview">Preview Profile</button>
+          </div>
         </header>
 
         <div class="chat-messages scroll">
           <div
             v-for="m in chatMessages"
             :key="m.id"
-            :class="['message', { 'own-message': m.sender === 'You' }]"
+            :class="['message', { 'own-message': m.senderDogId === currentDogId }]"
           >
             <div class="message-content">
-              <span class="message-sender" v-if="m.sender !== 'You'">{{ m.sender }}</span>
+              <span class="message-sender" v-if="m.senderDogId !== currentDogId">{{ otherDogName }}</span>
               <p class="message-text">{{ m.text }}</p>
-              <span class="message-time">{{ formatTime(m.ts) }}</span>
+              <span class="message-time">{{ formatTime(m.createdAtMs) }}</span>
             </div>
           </div>
         </div>
@@ -74,7 +90,7 @@
             placeholder="Type a message…"
             class="message-input"
           />
-          <button class="send-btn" :disabled="!messageInput.trim()" @click="sendChatMessage">
+          <button class="send-btn" :disabled="!messageInput.trim() || !selectedThreadId" @click="sendChatMessage">
             <svg class="send-icon" viewBox="0 0 24 24">
               <path fill="currentColor" d="M2,21L23,12L2,3V10L17,12L2,14V21Z"/>
             </svg>
@@ -98,167 +114,482 @@
         <div class="nav-item" @click="goToSettings"><span>Settings</span></div>
       </div>
     </div>
+
+    <!-- Discover-style Profile Preview Modal -->
+    <div v-if="profileOpen" class="profile-modal">
+      <div class="profile-backdrop" @click="closeProfilePreview"></div>
+
+      <div class="preview-card">
+        <button class="close-x" @click="closeProfilePreview">×</button>
+
+        <!-- Top image (like Discover) -->
+        <div class="card-image">
+          <img :src="profileDog?.image || placeholder" :alt="profileDog?.name || 'Dog'" />
+          <div class="card-overlay">
+            <div class="dog-info">
+              <h2>{{ profileDog?.name }}<span v-if="profileDog?.age !== '' && profileDog?.age !== null">, {{ profileDog?.age }}</span></h2>
+              <p>{{ profileDog?.breed }}<span v-if="profileDog?.breed && profileDog?.location"> • </span>{{ profileDog?.location }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scrollable details (Discover layout) -->
+        <div class="card-details">
+          <div class="info-section">
+            <div class="detail-row" v-if="profileDog?.sex">
+              <span class="label">Sex:</span>
+              <span class="value">{{ profileDog.sex }}</span>
+            </div>
+            <div class="detail-row" v-if="profileDog?.weight">
+              <span class="label">Weight:</span>
+              <span class="value">{{ profileDog.weight }} lbs</span>
+            </div>
+            <div class="detail-row" v-if="profileDog?.ownerName">
+              <span class="label">Owner:</span>
+              <span class="value">{{ profileDog.ownerName }}</span>
+            </div>
+          </div>
+
+          <div v-if="profileDog?.temperament" class="content-section">
+            <h4>About {{ profileDog.name }}</h4>
+            <p class="temperament">{{ profileDog.temperament }}</p>
+          </div>
+
+          <div v-if="hasTrainingInfo(profileDog)" class="content-section">
+            <h4>Training & Certifications</h4>
+            <div v-if="profileDog.trainingLevel" class="training-level">
+              <span class="label">Training Level:</span>
+              <span class="value">{{ profileDog.trainingLevel }}</span>
+            </div>
+            <div v-if="profileDog.certifications && profileDog.certifications.length > 0" class="certifications">
+              <span class="label">Certifications:</span>
+              <div class="cert-badges">
+                <span v-for="cert in profileDog.certifications" :key="cert" class="cert-badge">
+                  {{ certDisplay(cert) }}
+                </span>
+              </div>
+            </div>
+            <div v-if="profileDog.trainingNotes" class="training-notes">
+              <p>{{ profileDog.trainingNotes }}</p>
+            </div>
+          </div>
+
+          <div v-if="profileDog?.medicalPapers && profileDog.medicalPapers.length > 0" class="content-section">
+            <h4>Health Certifications</h4>
+            <div class="medical-papers">
+              <div v-for="(paper, index) in profileDog.medicalPapers" :key="index" class="paper-item">
+                <div class="paper-icon">📄</div>
+                <div class="paper-info">
+                  <span class="paper-name">{{ paper.name || 'Health Certificate' }}</span>
+                  <span class="paper-date">{{ paper.date || 'Date not specified' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="hasPreferences(profileDog)" class="content-section">
+            <h4>Breeding Preferences</h4>
+            <div v-if="profileDog.lookingFor" class="preference-item">
+              <span class="label">Looking for:</span>
+              <span class="value">{{ profileDog.lookingFor }}</span>
+            </div>
+            <div v-if="profileDog.preferredBreeds" class="preference-item">
+              <span class="label">Preferred breeds:</span>
+              <span class="value">{{ profileDog.preferredBreeds }}</span>
+            </div>
+            <div v-if="profileDog.minAgePref || profileDog.maxAgePref" class="preference-item">
+              <span class="label">Age preference:</span>
+              <span class="value">{{ agePreferenceDisplay(profileDog) }}</span>
+            </div>
+            <div v-if="profileDog.travelDistance" class="preference-item">
+              <span class="label">Willing to travel:</span>
+              <span class="value">{{ profileDog.travelDistance }} miles</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- /Profile Preview Modal -->
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { onAuthStateChanged } from 'firebase/auth'
-import { auth } from '../lib/firebase' // ← change to '@/firebase' if that's your alias
+import { auth, db } from '../lib/firebase'
+import {
+  collection, getDocs, getDoc, addDoc, updateDoc, doc, query, where,
+  orderBy, onSnapshot, serverTimestamp
+} from 'firebase/firestore'
 
 const router = useRouter()
 
 /* UI State */
 const showMenu = ref(false)
-const selectedConvKey = ref(null)
+const selectedConvKey = ref(null)          // "t:<threadId>" or "n:<otherDogId>"
+const selectedThreadId = ref(null)         // actual thread id when selected
 const messageInput = ref('')
-const refreshTick = ref(0) // bump to recompute from localStorage
 const placeholder = 'https://images.unsplash.com/photo-1517423440428-a5a00ad493e8?w=400&h=400&fit=crop&q=80'
 
-/* Keys shared with DiscoverView demo */
-const MATCHES_KEY = 'demo_matches'
-const MESSAGES_KEY = 'demo_messages'           // { [convKey]: Message[] }
-const MESSAGES_META_KEY = 'demo_messages_meta' // { [convKey]: { lastReadTs:number } }
+/* Dogs / active dog */
+const myDogs = ref([])          // [{id,name,image}]
+const currentDogId = ref(null)  // active "chat as" dog id
 
-/* Helpers (localStorage) */
-function loadStoredMatches() {
-  try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] }
-}
-function loadAllMessages() {
-  try { return JSON.parse(localStorage.getItem(MESSAGES_KEY) || '{}') } catch { return {} }
-}
-function saveAllMessages(obj) { localStorage.setItem(MESSAGES_KEY, JSON.stringify(obj)) }
-function loadAllMeta() {
-  try { return JSON.parse(localStorage.getItem(MESSAGES_META_KEY) || '{}') } catch { return {} }
-}
-function saveAllMeta(obj) { localStorage.setItem(MESSAGES_META_KEY, JSON.stringify(obj)) }
-
-function convKeyForDog(dog) {
-  const id = dog?.id ?? dog?.ownerId ?? 'unknown'
-  return `dog_${id}`
-}
-
+/* Matches + threads */
+const fetchedMatches = ref([])  // matched dog profiles for currentDogId (no threads yet)
+const threadConvos = ref([])    // threads for currentDogId [{threadId, dog, lastText,lastTs, unread}]
 const conversations = computed(() => {
-  refreshTick.value // dependency
-  const matches = loadStoredMatches()
-  const allMsgs = loadAllMessages()
-  const meta = loadAllMeta()
+  const threadItems = threadConvos.value.map(t => ({
+    key: `t:${t.threadId}`,
+    type: 'thread',
+    dog: t.dog,
+    lastText: t.lastText || 'Say hello 👋',
+    lastTs: t.lastTs || 0,
+    unread: t.unread || 0,
+    threadId: t.threadId
+  }))
 
-  return matches.map(dog => {
-    const key = convKeyForDog(dog)
-    const msgs = (allMsgs[key] || []).sort((a,b)=>a.ts-b.ts)
-    const last = msgs[msgs.length - 1]
-    const lastRead = meta[key]?.lastReadTs || 0
-    const unread = msgs.filter(m => m.ts > lastRead && m.sender !== 'You').length
-    return {
-      key,
-      dog,
-      lastText: last ? last.text : 'Say hello 👋',
-      lastTs: last ? last.ts : 0,
-      unread
-    }
-  }).sort((a,b)=>b.lastTs - a.lastTs)
+  const threadDogIds = new Set(threadConvos.value.map(t => t.dog.id))
+  const newItems = fetchedMatches.value
+    .filter(d => !threadDogIds.has(d.id))
+    .map(d => ({
+      key: `n:${d.id}`,
+      type: 'new',
+      dog: d,
+      lastText: 'Say hello 👋',
+      lastTs: d.matchedAt || 0,
+      unread: 0,
+      threadId: null
+    }))
+
+  return [...threadItems, ...newItems].sort((a,b)=> (b.lastTs||0) - (a.lastTs||0))
 })
 
+/* Selected chat state */
 const selectedConversation = computed(() =>
   conversations.value.find(c => c.key === selectedConvKey.value)
 )
 const selectedDog = computed(() => selectedConversation.value?.dog || null)
-const chatMessages = computed(() => {
-  refreshTick.value // dependency
-  const all = loadAllMessages()
-  const arr = all[selectedConvKey.value] || []
-  return arr.sort((a,b)=>a.ts-b.ts)
-})
+const otherDogName = computed(() => selectedDog.value?.ownerName || 'Owner')
 
-function openConversation(key) {
-  selectedConvKey.value = key
-  const meta = loadAllMeta()
-  meta[key] = { lastReadTs: Date.now() }
-  saveAllMeta(meta)
-  refreshTick.value++
+/* Message stream */
+const chatMessages = ref([]) // [{id, text, senderDogId, createdAtMs}]
+
+/* Caches */
+const dogCache = new Map()
+
+// ----- Helpers: Dogs & Matches -----
+async function fetchMyDogs(userUid) {
+  const q = query(collection(db, 'dogs'), where('ownerId', '==', userUid))
+  const snap = await getDocs(q)
+  return snap.docs.map(d => {
+    const data = d.data()
+    const gallery = Array.isArray(data.gallery) ? data.gallery : []
+    const image = gallery[0] || data.image || '/placeholder.png'
+    return { id: d.id, name: data.name || 'Unnamed', image }
+  })
 }
 
-function sendChatMessage() {
-  const text = messageInput.value.trim()
-  if (!text || !selectedConvKey.value) return
-  const all = loadAllMessages()
-  const arr = all[selectedConvKey.value] || []
-  arr.push({ id: Date.now(), sender: 'You', text, ts: Date.now() })
-  all[selectedConvKey.value] = arr
-  saveAllMessages(all)
-  messageInput.value = ''
-  refreshTick.value++
-
-  // Simulated reply
-  setTimeout(() => {
-    const all2 = loadAllMessages()
-    const arr2 = all2[selectedConvKey.value] || []
-    arr2.push({
-      id: Date.now()+1,
-      sender: selectedDog.value?.ownerName || 'Owner',
-      text: getRandomReply(),
-      ts: Date.now()+1
-    })
-    all2[selectedConvKey.value] = arr2
-    saveAllMessages(all2)
-    refreshTick.value++
-  }, 1000)
-}
-
-function getRandomReply() {
-  const replies = [
-    "That sounds great! 🐾",
-    "We’re free this weekend—want to meet at a park?",
-    "Cute! Do you have recent vet records?",
-    "Fetch is her fave. Bring a ball!",
-    "I can share more pics if you want."
-  ]
-  return replies[Math.floor(Math.random() * replies.length)]
-}
-
-function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-/* Keep list fresh when matches are created in Discover */
-function onMatchesUpdated() { refreshTick.value++ }
-function onStorageChange(e) {
-  if ([MATCHES_KEY, MESSAGES_KEY, MESSAGES_META_KEY].includes(e.key)) {
-    refreshTick.value++
+function firstPhotoUrl(d) {
+  if (Array.isArray(d?.gallery) && d.gallery.length) return d.gallery[0]
+  if (Array.isArray(d?.photos) && d.photos.length) {
+    const p0 = d.photos[0]
+    if (typeof p0 === 'string') return p0
+    if (p0 && typeof p0 === 'object' && 'url' in p0) return p0.url || ''
   }
+  return ''
+}
+function normalizePhotoArray(d) {
+  if (Array.isArray(d?.gallery) && d.gallery.length) return d.gallery.slice()
+  if (Array.isArray(d?.photos) && d.photos.length) {
+    return d.photos.map(p => (typeof p === 'string' ? p : (p && p.url) || '')).filter(Boolean)
+  }
+  return []
 }
 
-/* ── NEW: Redirect to Home if user signs out ────────────────────────────── */
+async function getDogProfile(dogId) {
+  if (dogCache.has(dogId)) return dogCache.get(dogId)
+  const ds = await getDoc(doc(db, 'dogs', dogId))
+  if (!ds.exists()) return null
+  const dd = ds.data()
+  const gallery = Array.isArray(dd.gallery) ? dd.gallery : []
+  const image = gallery[0] || dd.image || '/placeholder.png'
+  const prof = {
+    id: ds.id,
+    name: dd.name || 'Unnamed',
+    ownerName: dd.ownerName || dd.owner || '',
+    breed: dd.breed || '',
+    location: dd.location || '',
+    image,
+    age: dd.age ?? null,
+    gallery
+  }
+  dogCache.set(dogId, prof)
+  return prof
+}
+
+async function fetchReciprocalMatches(myDogId) {
+  if (!myDogId) return []
+
+  const byUsSnap = await getDocs(
+    query(collection(db, 'likes'), where('fromDogId', '==', myDogId))
+  )
+  const likedDogIds = byUsSnap.docs.map(d => d.data().toDogId)
+  if (likedDogIds.length === 0) return []
+
+  const toUsSnap = await getDocs(
+    query(collection(db, 'likes'), where('toDogId', '==', myDogId))
+  )
+  const theirLikes = toUsSnap.docs.map(d => d.data().fromDogId)
+
+  const matchedDogIds = likedDogIds.filter(id => theirLikes.includes(id))
+  const out = []
+  for (const id of matchedDogIds) {
+    const prof = await getDogProfile(id)
+    if (prof) out.push({ ...prof, matchedAt: Date.now() })
+  }
+  return out
+}
+
+// ----- Threads (listening) -----
+let unsubscribeThreads = null
+function subscribeThreadsForDog(myDogId) {
+  if (unsubscribeThreads) { unsubscribeThreads(); unsubscribeThreads = null }
+  threadConvos.value = []
+  if (!myDogId) return
+
+  const qThreads = query(
+    collection(db, 'threads'),
+    where('members', 'array-contains', myDogId),
+  )
+
+  unsubscribeThreads = onSnapshot(qThreads, async (snap) => {
+    const items = []
+    for (const docSnap of snap.docs) {
+      const t = docSnap.data()
+      const threadId = docSnap.id
+      const otherDogId = (t.members || []).find(d => d !== myDogId)
+      const otherDog = otherDogId ? await getDogProfile(otherDogId) : null
+
+      const lastTs = t.lastMessageAt?.toMillis ? t.lastMessageAt.toMillis() : 0
+      const lastText = t.lastMessageText || ''
+      const lastReadTs = t.lastReadAtBy?.[myDogId]?.toMillis?.() || 0
+      const unread = lastTs && lastTs > lastReadTs ? 1 : 0
+
+      if (otherDog) {
+        items.push({ threadId, dog: otherDog, lastText, lastTs, unread })
+      }
+    }
+    items.sort((a,b)=> (b.lastTs||0) - (a.lastTs||0))
+    threadConvos.value = items
+  })
+}
+
+// ----- Messages (listening) -----
+let unsubscribeMessages = null
+function subscribeMessages(threadId) {
+  if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null }
+  chatMessages.value = []
+  if (!threadId) return
+  const qMsgs = query(
+    collection(db, 'threads', threadId, 'messages'),
+    orderBy('createdAt', 'asc')
+  )
+  unsubscribeMessages = onSnapshot(qMsgs, (snap) => {
+    const arr = []
+    snap.forEach(d => {
+      const m = d.data()
+      arr.push({
+        id: d.id,
+        text: m.text,
+        senderDogId: m.senderDogId,
+        createdAtMs: m.createdAt?.toMillis ? m.createdAt.toMillis() : Date.now()
+      })
+    })
+    chatMessages.value = arr
+  })
+}
+
+// ----- Thread creation / open / read -----
+async function ensureThread(otherDogId) {
+  const a = currentDogId.value
+  const b = otherDogId
+  const membersKey = [a, b].sort().join('_')
+
+  const q1 = query(collection(db, 'threads'), where('membersKey', '==', membersKey))
+  const s1 = await getDocs(q1)
+  if (!s1.empty) return s1.docs[0].id
+
+  const q2 = query(collection(db, 'threads'), where('members', 'array-contains', a))
+  const s2 = await getDocs(q2)
+  const hit = s2.docs.find(d => {
+    const m = d.data().members || []
+    return m.includes(a) && m.includes(b)
+  })
+  if (hit) return hit.id
+
+  const docRef = await addDoc(collection(db, 'threads'), {
+    members: [a, b].sort(),
+    membersKey,
+    createdAt: serverTimestamp(),
+    lastMessageAt: null,
+    lastMessageText: '',
+    lastMessageSenderDogId: null,
+    lastReadAtBy: { [a]: serverTimestamp() }
+  })
+  return docRef.id
+}
+
+async function markThreadRead(threadId) {
+  if (!threadId || !currentDogId.value) return
+  await updateDoc(doc(db, 'threads', threadId), {
+    [`lastReadAtBy.${currentDogId.value}`]: serverTimestamp()
+  })
+}
+
+async function openConversation(key) {
+  const item = conversations.value.find(c => c.key === key)
+  if (!item) return
+
+  if (item.type === 'new') {
+    const tid = await ensureThread(item.dog.id)
+    selectedConvKey.value = `t:${tid}`
+    selectedThreadId.value = tid
+  } else {
+    selectedConvKey.value = key
+    selectedThreadId.value = item.threadId
+  }
+
+  subscribeMessages(selectedThreadId.value)
+  await markThreadRead(selectedThreadId.value)
+}
+
+// ----- Sending -----
+async function sendChatMessage() {
+  const text = messageInput.value.trim()
+  if (!text || !selectedThreadId.value || !currentDogId.value) return
+
+  await addDoc(collection(db, 'threads', selectedThreadId.value, 'messages'), {
+    text,
+    senderDogId: currentDogId.value,
+    createdAt: serverTimestamp()
+  })
+
+  await updateDoc(doc(db, 'threads', selectedThreadId.value), {
+    lastMessageText: text,
+    lastMessageAt: serverTimestamp(),
+    lastMessageSenderDogId: currentDogId.value,
+    [`lastReadAtBy.${currentDogId.value}`]: serverTimestamp()
+  })
+
+  messageInput.value = ''
+}
+
+// ----- Profile preview (Discover-style) -----
+const profileOpen = ref(false)
+const profileDog = ref(null)
+
+function computeAgeYears(d) {
+  if (d.age !== undefined && d.age !== null && d.age !== '') return d.age
+  if (d.birthdate) {
+    const years = Math.max(0, Math.floor((Date.now() - new Date(d.birthdate).getTime()) / (365.25 * 24 * 3600 * 1000)))
+    return years
+  }
+  return ''
+}
+async function openProfilePreview() {
+  if (!selectedDog.value) return
+  const ds = await getDoc(doc(db, 'dogs', selectedDog.value.id))
+  if (ds.exists()) {
+    const d = ds.data()
+    const photos = normalizePhotoArray(d)
+    const image = firstPhotoUrl(d) || selectedDog.value.image || '/placeholder.png'
+    profileDog.value = {
+      id: ds.id,
+      name: d.name || 'Unnamed',
+      ownerName: d.ownerName || d.owner || 'Owner',
+      breed: d.breed || '',
+      location: d.location || '',
+      age: computeAgeYears(d),
+      sex: d.sex || '',
+      weight: d.weight || d.weightValue || '',
+      temperament: d.temperament || '',
+      trainingLevel: d.trainingLevel || '',
+      certifications: d.certifications || [],
+      trainingNotes: d.trainingNotes || '',
+      lookingFor: d.lookingFor || '',
+      preferredBreeds: d.preferredBreeds || '',
+      minAgePref: d.minAgePref || '',
+      maxAgePref: d.maxAgePref || '',
+      travelDistance: d.travelDistance || '',
+      medicalPapers: d.medicalPapers || [],
+      photos,
+      image
+    }
+  } else {
+    profileDog.value = { ...selectedDog.value, photos: selectedDog.value.gallery || [] }
+  }
+  profileOpen.value = true
+}
+function closeProfilePreview() { profileOpen.value = false }
+
+
+/* Helpers reused from Discover layout */
+const certDisplay = (cert) => {
+  const certMap = {
+    'akc': 'AKC Registered',
+    'therapy': 'Therapy Dog Certified',
+    'service': 'Service Dog Trained',
+    'cpr': 'CPR Certified',
+    'obedience': 'Obedience Trained'
+  }
+  return cert ? (certMap[String(cert).toLowerCase()] || cert) : ''
+}
+const hasTrainingInfo = (dog) =>
+  !!(dog?.trainingLevel || (dog?.certifications && dog.certifications.length) || dog?.trainingNotes)
+const hasPreferences = (dog) =>
+  !!(dog?.lookingFor || dog?.preferredBreeds || dog?.minAgePref || dog?.maxAgePref || dog?.travelDistance)
+const agePreferenceDisplay = (dog) => {
+  const min = dog?.minAgePref
+  const max = dog?.maxAgePref
+  if (!min && !max) return 'No preference'
+  if (min && max) return `${min}-${max} years`
+  if (min) return `${min}+ years`
+  if (max) return `Up to ${max} years`
+  return 'Not specified'
+}
+
+// ----- Auth + initial hydrate -----
 let unsubscribeAuth = null
 function ensureSignedIn() {
   if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null }
-  unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+  unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
     if (!u) {
-      router.replace('/') // not signed in → bounce to Home
+      router.replace('/')
       return
     }
-    // signed in → ensure UI is hydrated
-    refreshTick.value++
+    myDogs.value = await fetchMyDogs(u.uid)
+    if (!currentDogId.value && myDogs.value.length) {
+      currentDogId.value = myDogs.value[0].id
+    }
   })
 }
-/* ──────────────────────────────────────────────────────────────────────── */
 
-onMounted(() => {
-  ensureSignedIn() // start auth watcher
-
-  window.addEventListener('matches-updated', onMatchesUpdated)
-  window.addEventListener('storage', onStorageChange)
-
-  // open first conversation automatically (if any)
-  const first = conversations.value[0]
-  if (first) openConversation(first.key)
+// When active dog changes: (re)load matches and subscribe to threads
+watch(currentDogId, async (n) => {
+  selectedConvKey.value = null
+  selectedThreadId.value = null
+  if (!n) return
+  fetchedMatches.value = await fetchReciprocalMatches(n)
+  subscribeThreadsForDog(n)
 })
+
+onMounted(() => { ensureSignedIn() })
 onUnmounted(() => {
-  window.removeEventListener('matches-updated', onMatchesUpdated)
-  window.removeEventListener('storage', onStorageChange)
-  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null } // cleanup
+  if (unsubscribeAuth) { unsubscribeAuth(); unsubscribeAuth = null }
+  if (unsubscribeThreads) { unsubscribeThreads(); unsubscribeThreads = null }
+  if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null }
 })
 
 /* Nav + header */
@@ -267,13 +598,16 @@ const goToDiscover = () => { router.push('/discover'); showMenu.value = false }
 const goToProfile  = () => { router.push('/profile');  showMenu.value = false }
 const goToMatches  = () => { router.push('/matches');  showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
+
+/* Utils */
+function formatTime(ts) {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
 </script>
 
-
 <style scoped>
+/* your original styles… */
 .messages-page { min-height: 100vh; background: #f8f9fa; }
-
-/* header (matches your style) */
 .page-header {
   background: #6A2C4A; color: white; padding: 1rem 2rem;
   display: flex; justify-content: space-between; align-items: center;
@@ -284,12 +618,14 @@ const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 .menu-btn:hover { background: rgba(255,255,255,.1); }
 .menu-icon { width: 24px; height: 24px; }
 
-/* layout */
+.chat-as { display: flex; align-items: center; gap: .5rem; }
+.chat-as select {
+  border-radius: 999px; padding: .35rem .6rem; border: 1px solid #e9ecef; color: #333;
+}
+
 .messages-layout {
   padding: 1rem; display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: calc(100vh - 80px);
 }
-
-/* convo list */
 .convo-list { border: 1px solid #e9ecef; background: #fff; border-radius: 12px; overflow: hidden; }
 .convo-empty { padding: 1rem; color: #666; }
 .convo-item {
@@ -308,14 +644,26 @@ const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 .convo-last { font-size: .9rem; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge { background: #6A2C4A; color:#fff; border-radius: 999px; padding: 2px 8px; font-size: .75rem; font-weight: 700; }
 
-/* chat pane */
 .chat-pane { border: 1px solid #e9ecef; background: #fff; border-radius: 12px; display: flex; flex-direction: column; }
 .chat-pane.empty { align-items: center; justify-content: center; color: #666; }
-.chat-header.compact { background: #6A2C4A; color: white; padding: 10px 12px; border-radius: 12px 12px 0 0; }
+
+/* header with preview button */
+.chat-header.compact {
+  background: #6A2C4A; color: white; padding: 10px 12px; border-radius: 12px 12px 0 0;
+  display: flex; align-items: center; justify-content: space-between;
+}
 .chat-dog-info { display: flex; align-items: center; gap: 10px; }
 .chat-dog-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
 .chat-dog-info h3 { margin: 0; font-size: 1rem; }
 .chat-dog-info p { margin: 0; font-size: .8rem; opacity: .85; }
+
+.chat-actions { display: flex; align-items: center; }
+.preview-btn {
+  background: transparent; color: #fff; border: 1px solid #fff;
+  padding: .35rem .6rem; border-radius: 999px; cursor: pointer;
+}
+.preview-btn:hover { background: rgba(255,255,255,.12); }
+
 .chat-messages.scroll { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .message { display: flex; flex-direction: column; }
 .message.own-message { align-items: flex-end; }
@@ -335,7 +683,6 @@ const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 .send-btn:hover:not(:disabled) { transform: scale(1.05); }
 .send-icon { width: 20px; height: 20px; }
 
-/* nav menu (matches your app) */
 .nav-menu { position: fixed; top: 0; right: 0; width: 100%; height: 100%; z-index: 200; }
 .nav-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.5); }
 .nav-content { position: absolute; top: 0; right: 0; width: 250px; height: 100%; background: #6A2C4A; padding: 2rem 0; }
@@ -347,4 +694,77 @@ const goToSettings = () => { router.push('/settings'); showMenu.value = false }
   .convo-list { max-height: 300px; overflow-y: auto; }
   .page-header { padding: 1rem; }
 }
+
+/* === Discover-style preview modal === */
+.profile-modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; }
+.profile-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.5); }
+
+/* Card container mirrors Discover proportions */
+.preview-card {
+  position: relative;
+  width: min(92vw, 340px);
+  height: 560px; /* similar to Discover 300x500, a bit taller for content */
+  background: #fff;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+
+/* close button */
+.close-x {
+  position: absolute; top: .5rem; right: .5rem; z-index: 2;
+  width: 32px; height: 32px; border: none; border-radius: 50%;
+  background: rgba(255,255,255,.9); cursor: pointer; font-size: 20px; color: #6A2C4A;
+}
+
+/* Top image (60%) */
+.card-image { position: relative; height: 60%; overflow: hidden; }
+.card-image img { width: 100%; height: 100%; object-fit: cover; }
+.card-overlay {
+  position: absolute; inset: auto 0 0 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.7));
+  padding: 1rem; color: white;
+}
+.dog-info h2 { margin: 0 0 .25rem 0; font-size: 1.3rem; }
+.dog-info p { margin: 0; opacity: .9; }
+
+/* Details (40%) scrollable */
+.card-details { height: 40%; overflow-y: auto; padding: 1rem; }
+.info-section { margin-bottom: 1rem; }
+.detail-row {
+  display: flex; justify-content: space-between;
+  margin-bottom: 0.5rem; padding: 0.25rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.detail-row:last-child { border-bottom: none; }
+.label { font-weight: 600; color: #666; }
+.value { color: #333; }
+
+.content-section { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #f0f0f0; }
+.content-section:last-child { border-bottom: none; }
+.content-section h4 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; color: #333; }
+.temperament { margin: 0; line-height: 1.4; color: #555; font-size: 0.9rem; }
+
+.training-level, .certifications, .training-notes { margin-bottom: 0.75rem; }
+.cert-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.cert-badge { background: #6A2C4A; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 500; }
+
+.medical-papers { display: flex; flex-direction: column; gap: 0.5rem; }
+.paper-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
+.paper-info { display: flex; flex-direction: column; gap: 0.1rem; }
+.paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
+.paper-date { font-size: 0.7rem; color: #666; }
+
+.preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.preference-item .label { font-size: 0.8rem; }
+.preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
+
+
+
+/* actions */
+.profile-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.preview-close {
+  background: #6A2C4A; color: #fff; border: none; border-radius: 999px; padding: .45rem .8rem; cursor: pointer;
+}
+.preview-close:hover { opacity: .9; }
 </style>

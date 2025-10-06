@@ -4,29 +4,48 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
     function isOwner(ownerId) { return isSignedIn() && request.auth.uid == ownerId; }
 
-    // --- users: owner writes, choose if reads are public or signed-in ---
+    // Helpers for dog ownership & membership checks
+    function dogDoc(dogId) {
+      return get(/databases/$(database)/documents/dogs/$(dogId));
+    }
+    function dogExists(dogId) {
+      return exists(/databases/$(database)/documents/dogs/$(dogId));
+    }
+    function userOwnsDog(dogId) {
+      return isSignedIn() && dogExists(dogId) && dogDoc(dogId).data.ownerId == request.auth.uid;
+    }
+    function membersAreValid(members) {
+      return members is list
+        && members.size() == 2
+        && members[0] is string
+        && members[1] is string
+        && members[0] != members[1]
+        && dogExists(members[0]) && dogExists(members[1]);
+    }
+    function actorOwnsAny(members) {
+      return userOwnsDog(members[0]) || userOwnsDog(members[1]);
+    }
+
+    // --- users: owner writes, reads are public (change to isSignedIn() if you want) ---
     match /users/{uid} {
-      // If you want public browsing of profiles, use `if true;`
-      // If you only want signed-in users to browse, keep isSignedIn()
-      allow read: if true;  // <- change to isSignedIn() if you prefer
-      allow create: if isSignedIn()
-                    && request.resource.data.uid == request.auth.uid;
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
       allow update, delete: if isOwner(resource.data.uid);
     }
 
-    // --- dogs: enforce owner + schema together ---
+    // --- dogs: enforce owner + simple schema ---
     match /dogs/{dogId} {
       allow read: if true;
       allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if isOwner(resource.data.ownerId);
+      // basic schema guard (combined with the above rules)
       allow create, update: if
         request.resource.data.keys().hasAll(["ownerId","name","sex"]) &&
         (request.resource.data.name is string) &&
         (request.resource.data.sex in ["M","F"]);
     }
 
-
-    // --- likes: combine all constraints in ONE line ---
+    // --- likes ---
     match /likes/{likeId} {
       allow read: if isSignedIn();
 
@@ -38,10 +57,66 @@ service cloud.firestore {
       allow delete: if isOwner(resource.data.ownerId);
     }
 
-    // --- matches: server-only is fine ---
+    // --- matches: server-only ---
     match /matches/{matchId} {
       allow read: if isSignedIn();
       allow create, update, delete: if false;
+    }
+
+    // === NEW: threads + messages ===
+    match /threads/{threadId} {
+      // Anyone who owns one of the member dogs can read the thread
+      allow read: if isSignedIn() && actorOwnsAny(resource.data.members);
+
+      // Create a thread if:
+      // - signed in
+      // - exactly 2 distinct dog ids that exist
+      // - caller owns at least one of them
+      allow create: if isSignedIn()
+        && membersAreValid(request.resource.data.members)
+        && actorOwnsAny(request.resource.data.members)
+        && (request.resource.data.membersKey is string);
+
+      // Update only summary/read fields; membership & createdAt immutable
+      allow update: if isSignedIn()
+        && actorOwnsAny(resource.data.members)
+        && request.resource.data.members == resource.data.members
+        && request.resource.data.membersKey == resource.data.membersKey
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "lastMessageAt",
+          "lastMessageText",
+          "lastMessageSenderDogId",
+          "lastReadAtBy"
+        ]);
+
+      // No client deletes
+      allow delete: if false;
+
+      // Messages subcollection
+      match /messages/{messageId} {
+        function parentMembers() {
+          return get(/databases/$(database)/documents/threads/$(threadId)).data.members;
+        }
+
+        // Read if you own at least one member dog
+        allow read: if isSignedIn() && actorOwnsAny(parentMembers());
+
+        // Create message if:
+        // - signed in
+        // - senderDogId is one of the thread members and owned by caller
+        // - non-empty text (limit length if you want)
+        allow create: if isSignedIn()
+          && (request.resource.data.senderDogId is string)
+          && (request.resource.data.senderDogId in parentMembers())
+          && userOwnsDog(request.resource.data.senderDogId)
+          && (request.resource.data.text is string)
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000;
+
+        // No client edits/deletes messages
+        allow update, delete: if false;
+      }
     }
   }
 }

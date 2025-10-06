@@ -55,6 +55,110 @@
         </div>
       </div>
     </div>
+
+    <!-- Discover-style Profile Preview Modal -->
+    <div v-if="profileOpen" class="profile-modal">
+      <div class="profile-backdrop" @click="closeProfilePreview"></div>
+
+      <div class="preview-card">
+        <button class="close-x" @click="closeProfilePreview">×</button>
+
+        <!-- Top image (like Discover) -->
+        <div class="card-image">
+          <img :src="profileDog?.image || '/placeholder.png'" :alt="profileDog?.name || 'Dog'" />
+          <div class="card-overlay">
+            <div class="dog-info">
+              <h2>
+                {{ profileDog?.name }}
+                <span v-if="profileDog?.age !== '' && profileDog?.age !== null">, {{ profileDog?.age }}</span>
+              </h2>
+              <p>
+                {{ profileDog?.breed }}
+                <span v-if="profileDog?.breed && profileDog?.location"> • </span>
+                {{ profileDog?.location }}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scrollable details (Discover layout) -->
+        <div class="card-details">
+          <div class="info-section">
+            <div class="detail-row" v-if="profileDog?.sex">
+              <span class="label">Sex:</span>
+              <span class="value">{{ profileDog.sex }}</span>
+            </div>
+            <div class="detail-row" v-if="profileDog?.weight">
+              <span class="label">Weight:</span>
+              <span class="value">{{ profileDog.weight }} lbs</span>
+            </div>
+            <div class="detail-row" v-if="profileDog?.ownerName">
+              <span class="label">Owner:</span>
+              <span class="value">{{ profileDog.ownerName }}</span>
+            </div>
+          </div>
+
+          <div v-if="profileDog?.temperament" class="content-section">
+            <h4>About {{ profileDog.name }}</h4>
+            <p class="temperament">{{ profileDog.temperament }}</p>
+          </div>
+
+          <div v-if="hasTrainingInfo(profileDog)" class="content-section">
+            <h4>Training & Certifications</h4>
+            <div v-if="profileDog.trainingLevel" class="training-level">
+              <span class="label">Training Level:</span>
+              <span class="value">{{ profileDog.trainingLevel }}</span>
+            </div>
+            <div v-if="profileDog.certifications && profileDog.certifications.length > 0" class="certifications">
+              <span class="label">Certifications:</span>
+              <div class="cert-badges">
+                <span v-for="cert in profileDog.certifications" :key="cert" class="cert-badge">
+                  {{ certDisplay(cert) }}
+                </span>
+              </div>
+            </div>
+            <div v-if="profileDog.trainingNotes" class="training-notes">
+              <p>{{ profileDog.trainingNotes }}</p>
+            </div>
+          </div>
+
+          <div v-if="profileDog?.medicalPapers && profileDog.medicalPapers.length > 0" class="content-section">
+            <h4>Health Certifications</h4>
+            <div class="medical-papers">
+              <div v-for="(paper, index) in profileDog.medicalPapers" :key="index" class="paper-item">
+                <div class="paper-icon">📄</div>
+                <div class="paper-info">
+                  <span class="paper-name">{{ paper.name || 'Health Certificate' }}</span>
+                  <span class="paper-date">{{ paper.date || 'Date not specified' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="hasPreferences(profileDog)" class="content-section">
+            <h4>Breeding Preferences</h4>
+            <div v-if="profileDog.lookingFor" class="preference-item">
+              <span class="label">Looking for:</span>
+              <span class="value">{{ profileDog.lookingFor }}</span>
+            </div>
+            <div v-if="profileDog.preferredBreeds" class="preference-item">
+              <span class="label">Preferred breeds:</span>
+              <span class="value">{{ profileDog.preferredBreeds }}</span>
+            </div>
+            <div v-if="profileDog.minAgePref || profileDog.maxAgePref" class="preference-item">
+              <span class="label">Age preference:</span>
+              <span class="value">{{ agePreferenceDisplay(profileDog) }}</span>
+            </div>
+            <div v-if="profileDog.travelDistance" class="preference-item">
+              <span class="label">Willing to travel:</span>
+              <span class="value">{{ profileDog.travelDistance }} miles</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+    <!-- /Profile Preview Modal -->
   </div>
 </template>
 
@@ -77,6 +181,43 @@ const matches = ref([])
 const loading = ref(false)
 const currentDogId = ref(null)
 const currentUser = ref(null)
+
+/* Preview modal state */
+const profileOpen = ref(false)
+const profileDog = ref(null)
+
+/* Helpers reused from Discover */
+const certDisplay = (cert) => {
+  const certMap = {
+    'akc': 'AKC Registered',
+    'therapy': 'Therapy Dog Certified',
+    'service': 'Service Dog Trained',
+    'cpr': 'CPR Certified',
+    'obedience': 'Obedience Trained'
+  }
+  return cert ? (certMap[String(cert).toLowerCase()] || cert) : ''
+}
+const hasTrainingInfo = (dog) =>
+  !!(dog?.trainingLevel || (dog?.certifications && dog.certifications.length) || dog?.trainingNotes)
+const hasPreferences = (dog) =>
+  !!(dog?.lookingFor || dog?.preferredBreeds || dog?.minAgePref || dog?.maxAgePref || dog?.travelDistance)
+const agePreferenceDisplay = (dog) => {
+  const min = dog?.minAgePref
+  const max = dog?.maxAgePref
+  if (!min && !max) return 'No preference'
+  if (min && max) return `${min}-${max} years`
+  if (min) return `${min}+ years`
+  if (max) return `Up to ${max} years`
+  return 'Not specified'
+}
+function computeAgeYears(d) {
+  if (d.age !== undefined && d.age !== null && d.age !== '') return d.age
+  if (d.birthdate) {
+    const years = Math.max(0, Math.floor((Date.now() - new Date(d.birthdate).getTime()) / (365.25 * 24 * 3600 * 1000)))
+    return years
+  }
+  return ''
+}
 
 const sortedMatches = computed(() =>
   [...matches.value].sort((a, b) => (b.matchedAt || 0) - (a.matchedAt || 0))
@@ -166,9 +307,51 @@ function clearAll() {
 function goDiscover() {
   router.push('/discover')
 }
-function viewProfile(m) {
-  router.push({ name: 'dog-profile', params: { id: m.id } })
+
+/* OPEN PREVIEW instead of routing */
+async function viewProfile(m) {
+  try {
+    const ds = await getDoc(doc(db, 'dogs', m.id))
+    if (ds.exists()) {
+      const d = ds.data()
+      const image = (Array.isArray(d.gallery) && d.gallery[0]) || d.image || m.image || '/placeholder.png'
+      profileDog.value = {
+        id: ds.id,
+        name: d.name || m.name || 'Unnamed',
+        ownerName: d.ownerName || d.owner || m.ownerName || 'Owner',
+        breed: d.breed || m.breed || '',
+        location: d.location || m.location || '',
+        age: computeAgeYears(d),
+        sex: d.sex || '',
+        weight: d.weight || d.weightValue || '',
+        temperament: d.temperament || '',
+        trainingLevel: d.trainingLevel || '',
+        certifications: d.certifications || [],
+        trainingNotes: d.trainingNotes || '',
+        lookingFor: d.lookingFor || '',
+        preferredBreeds: d.preferredBreeds || '',
+        minAgePref: d.minAgePref || '',
+        maxAgePref: d.maxAgePref || '',
+        travelDistance: d.travelDistance || '',
+        medicalPapers: d.medicalPapers || [],
+        image
+      }
+    } else {
+      // fallback to minimal card data
+      profileDog.value = { ...m }
+    }
+    profileOpen.value = true
+  } catch (e) {
+    console.error('Failed to load profile:', e)
+    profileDog.value = { ...m }
+    profileOpen.value = true
+  }
 }
+
+function closeProfilePreview() {
+  profileOpen.value = false
+}
+
 function timeAgo(ts) {
   const diff = Date.now() - Number(ts)
   const mins = Math.floor(diff / 60000)
@@ -315,4 +498,69 @@ onBeforeUnmount(() => {
   color: #999;
   font-size: .8rem;
 }
+
+/* === Discover-style preview modal === */
+.profile-modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; }
+.profile-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.5); }
+
+.preview-card {
+  position: relative;
+  width: min(92vw, 340px);
+  height: 560px;
+  background: #fff;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.close-x {
+  position: absolute; top: .5rem; right: .5rem; z-index: 2;
+  width: 32px; height: 32px; border: none; border-radius: 50%;
+  background: rgba(255,255,255,.9); cursor: pointer; font-size: 20px; color: #6A2C4A;
+}
+
+.card-image { position: relative; height: 60%; overflow: hidden; }
+.card-image img { width: 100%; height: 100%; object-fit: cover; }
+.card-overlay {
+  position: absolute; inset: auto 0 0 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.7));
+  padding: 1rem; color: white;
+}
+.dog-info h2 { margin: 0 0 .25rem 0; font-size: 1.3rem; }
+.dog-info p { margin: 0; opacity: .9; }
+
+.card-details { height: 40%; overflow-y: auto; padding: 1rem; }
+.info-section { margin-bottom: 1rem; }
+.detail-row {
+  display: flex; justify-content: space-between;
+  margin-bottom: 0.5rem; padding: 0.25rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.detail-row:last-child { border-bottom: none; }
+.label { font-weight: 600; color: #666; }
+.value { color: #333; }
+
+.content-section { margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #f0f0f0; }
+.content-section:last-child { border-bottom: none; }
+.content-section h4 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; color: #333; }
+.temperament { margin: 0; line-height: 1.4; color: #555; font-size: 0.9rem; }
+
+.training-level, .certifications, .training-notes { margin-bottom: 0.75rem; }
+.cert-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.cert-badge { background: #6A2C4A; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 500; }
+
+.medical-papers { display: flex; flex-direction: column; gap: 0.5rem; }
+.paper-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
+.paper-info { display: flex; flex-direction: column; gap: 0.1rem; }
+.paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
+.paper-date { font-size: 0.7rem; color: #666; }
+
+.preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.preference-item .label { font-size: 0.8rem; }
+.preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
+
+.profile-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.preview-close {
+  background: #6A2C4A; color: #fff; border: none; border-radius: 999px; padding: .45rem .8rem; cursor: pointer;
+}
+.preview-close:hover { opacity: .9; }
 </style>

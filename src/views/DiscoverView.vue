@@ -202,7 +202,7 @@
         </button>
       </div>
 
-      <!-- Match Animation -->
+      <!-- Brief celebratory flash (optional) -->
       <div v-if="showMatchAnimation" class="match-animation">
         <div class="match-overlay"></div>
         <div class="match-content">
@@ -221,7 +221,45 @@
         </div>
       </div>
 
-      <!-- Chat Interface (demo) -->
+      <!-- Match Modal -->
+      <div
+        v-if="showMatchModal"
+        class="match-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Match dialog"
+        tabindex="0"
+      >
+        <div class="match-backdrop"></div>
+        <div class="match-card" role="document">
+          <!-- Only the top-right button OR Message will dismiss -->
+          <button class="match-close" @click="closeMatchModal" aria-label="Close">×</button>
+
+          <div class="match-header">
+            <div class="match-emoji">💘</div>
+            <h2>It’s a Match!</h2>
+            <p>{{ (activeDog?.name || 'Your dog') }} &amp; {{ matchedDog?.name }} like each other</p>
+          </div>
+
+          <div class="match-photos">
+            <div class="match-photo">
+              <img :src="activeDog?.image || ''" :alt="activeDog?.name || 'Your dog'" />
+              <span class="photo-label">{{ activeDog?.name || 'Your dog' }}</span>
+            </div>
+            <div class="vs">✦</div>
+            <div class="match-photo">
+              <img :src="matchedDog?.image || ''" :alt="matchedDog?.name || 'Matched dog'" />
+              <span class="photo-label">{{ matchedDog?.name || 'Matched dog' }}</span>
+            </div>
+          </div>
+
+          <div class="match-actions">
+            <button class="match-btn primary" @click="startChatWithMatch">Message</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Interface (demo; stays hidden now) -->
       <div v-if="showChat" class="chat-interface">
         <div class="chat-header">
           <div class="chat-dog-info">
@@ -309,11 +347,14 @@ const currentUser = ref(null)
 const matches = ref([])
 const showMatchAnimation = ref(false)
 const matchedDog = ref(null)
-const showChat = ref(false)
+const showChat = ref(false)            // stays false when redirecting to /messages
 const chatMessages = ref([])
 const newMessage = ref('')
 const isFiltering = ref(false)
 const filterError = ref('')
+
+// Modal state (cannot be dismissed by Esc/backdrop)
+const showMatchModal = ref(false)
 
 // Profile gate state
 const hasProfile = ref(false)
@@ -351,7 +392,6 @@ async function fetchMyDogs() {
              Array.isArray(data.photos) && data.photos.length ? (typeof data.photos[0] === 'string' ? data.photos[0] : data.photos[0]?.url || '') : ''
     }
   })
-  // Default to first dog if none selected
   if (!activeDogId.value && myDogs.value.length) activeDogId.value = myDogs.value[0].id
 }
 
@@ -608,6 +648,62 @@ const resetFilters = () => {
   loadDogs()
 }
 
+/* ---------------- Matches (local demo store) ---------------- */
+const MATCHES_KEY = 'demo_matches'
+function loadStoredMatches() { try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] } }
+function saveStoredMatches(arr) { localStorage.setItem(MATCHES_KEY, JSON.stringify(arr)) }
+function addMatchToStorage(dog) {
+  const existing = loadStoredMatches()
+  if (!existing.some(m => m.id === dog.id)) {
+    existing.unshift({ ...dog, matchedAt: Date.now() })
+    saveStoredMatches(existing)
+    window.dispatchEvent(new Event('matches-updated'))
+  }
+}
+
+/* ---------------- Firestore reciprocal like check ---------------- */
+async function hasReciprocalLike(otherDogId, myDogId) {
+  try {
+    // Try schema with a 'type' or 'kind' field indicating 'like'
+    let snap = await getDocs(
+      query(
+        collection(db, 'likes'),
+        where('fromDogId', '==', otherDogId),
+        where('toDogId', '==', myDogId),
+        where('type', '==', 'like'),
+        limit(1)
+      )
+    )
+    if (!snap.empty) return true
+
+    // Try 'kind' instead of 'type'
+    snap = await getDocs(
+      query(
+        collection(db, 'likes'),
+        where('fromDogId', '==', otherDogId),
+        where('toDogId', '==', myDogId),
+        where('kind', '==', 'like'),
+        limit(1)
+      )
+    )
+    if (!snap.empty) return true
+
+    // Fallback: any doc from otherDog -> myDog counts as a like
+    snap = await getDocs(
+      query(
+        collection(db, 'likes'),
+        where('fromDogId', '==', otherDogId),
+        where('toDogId', '==', myDogId),
+        limit(1)
+      )
+    )
+    return !snap.empty
+  } catch (e) {
+    console.error('Reciprocal like check failed:', e)
+    return false
+  }
+}
+
 /* ---------------- Deck actions ---------------- */
 const passDog = async () => {
   if (dogs.value.length === 0) return
@@ -630,19 +726,6 @@ const passDog = async () => {
   }
 }
 
-/* ---------------- Matches (local demo) ---------------- */
-const MATCHES_KEY = 'demo_matches'
-function loadStoredMatches() { try { return JSON.parse(localStorage.getItem(MATCHES_KEY) || '[]') } catch { return [] } }
-function saveStoredMatches(arr) { localStorage.setItem(MATCHES_KEY, JSON.stringify(arr)) }
-function addMatchToStorage(dog) {
-  const existing = loadStoredMatches()
-  if (!existing.some(m => m.id === dog.id)) {
-    existing.unshift({ ...dog, matchedAt: Date.now() })
-    saveStoredMatches(existing)
-    window.dispatchEvent(new Event('matches-updated'))
-  }
-}
-
 /* ---------------- Like / Match ---------------- */
 const likeDog = async () => {
   if (dogs.value.length === 0) return
@@ -655,8 +738,9 @@ const likeDog = async () => {
   if (!likedDog) return
   markDismissed(likedDog.id)
 
+  let res = null
   try {
-    await createLike({
+    res = await createLike({
       toDogId: likedDog.id,
       toDogOwnerId: likedDog.ownerId,
       fromDogId: activeDogId.value
@@ -665,31 +749,30 @@ const likeDog = async () => {
     console.error('Like failed:', e)
   }
 
-  // demo match logic (replace with real server-side matching later)
-  const isMatch = checkForMatch(likedDog)
+  // Determine if it's a match:
+  // 1) Service returns a flag (isMatch/match) OR
+  // 2) We find a reciprocal like in Firestore
+  let isMatch = false
+  if (res && (res.isMatch === true || res.match === true)) {
+    isMatch = true
+  } else {
+    isMatch = await hasReciprocalLike(likedDog.id, activeDogId.value)
+  }
+
   if (isMatch) {
     matches.value.push(likedDog)
     addMatchToStorage(likedDog)
     matchedDog.value = likedDog
+
+    // Brief celebration, then force modal (blocking)
     showMatchAnimation.value = true
     setTimeout(() => {
       showMatchAnimation.value = false
-      showChat.value = true
-      chatMessages.value = [
-        { id: 1, sender: 'system', message: `You matched with ${likedDog.name}! 🎉`, timestamp: new Date() },
-        { id: 2, sender: likedDog.ownerName, message: `Hi! I'm ${likedDog.ownerName}, ${likedDog.name}'s owner. She's such a sweet girl!`, timestamp: new Date() }
-      ]
-    }, 3000)
+      showMatchModal.value = true
+      // Lock scroll while modal open
+      document.documentElement.style.overflow = 'hidden'
+    }, 700)
   }
-}
-
-const checkForMatch = (dog) => {
-  const tangoBreed = 'Golden Retriever'
-  const tangoSex = 'male'
-  const tangoAge = 3
-  return dog.breed.toLowerCase() === tangoBreed.toLowerCase() &&
-         dog.sex.toLowerCase() !== tangoSex &&
-         Math.abs(Number(dog.age) - tangoAge) <= 1
 }
 
 /* ---------------- React when switching active dog ---------------- */
@@ -713,7 +796,7 @@ const goToProfile = () => { router.push('/profile'); showMenu.value = false }
 const goToMatches = () => { router.push('/matches'); showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 
-/* ---------------- Chat (demo) ---------------- */
+/* ---------------- Chat (demo - not used on Message click now) ---------------- */
 const getRandomResponse = () => {
   const responses = [
     "That's wonderful! When would be a good time to meet?",
@@ -731,12 +814,36 @@ const sendMessage = () => {
   chatMessages.value.push({ id: Date.now(), sender: 'You', message: newMessage.value, timestamp: new Date() })
   newMessage.value = ''
   setTimeout(() => {
-    chatMessages.value.push({ id: Date.now() + 1, sender: matchedDog.value.ownerName, message: getRandomResponse(), timestamp: new Date() })
-  }, 2000)
+    chatMessages.value.push({ id: Date.now() + 1, sender: matchedDog.value?.ownerName || 'Owner', message: getRandomResponse(), timestamp: new Date() })
+  }, 1200)
 }
 
 const closeChat = () => { showChat.value = false; matchedDog.value = null; chatMessages.value = [] }
 const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+// Open Messages page from modal (also dismisses the modal; no mini-chat)
+const startChatWithMatch = () => {
+  const withId = matchedDog.value?.id
+  showMatchModal.value = false
+  document.documentElement.style.overflow = '' // unlock scroll
+  // ensure no corner chat appears
+  showChat.value = false
+  chatMessages.value = []
+  // optional: clear matchedDog to avoid accidental reuse
+  // matchedDog.value = null
+
+  if (withId) {
+    router.push({ path: '/messages', query: { with: withId, fromDog: activeDogId.value } })
+  } else {
+    router.push('/messages')
+  }
+}
+
+// Close modal via top-right only (continue browsing)
+const closeMatchModal = () => {
+  showMatchModal.value = false
+  document.documentElement.style.overflow = '' // unlock scroll
+}
 </script>
 
 <style scoped>
@@ -943,10 +1050,56 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 .nav-item { padding: 1rem 2rem; color: white; cursor: pointer; transition: background-color 0.3s ease; }
 .nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.1); }
 
-.match-animation { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.match-animation { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 2500; display: flex; align-items: center; justify-content: center; }
 .match-overlay { position: absolute; inset: 0; background: rgba(106, 44, 74, 0.9); }
 .match-content { position: relative; z-index: 1; text-align: center; color: white; }
 .bubble { position: absolute; font-size: 2rem; animation: float 2s ease-in-out infinite; }
 @keyframes float { 0%, 100% { transform: translateY(0px) scale(1) } 50% { transform: translateY(-20px) scale(1.1) } }
 .chat-interface { position: fixed; bottom: 0; right: 0; width: 400px; height: 500px; background: white; border-radius: 20px 20px 0 0; box-shadow: 0 -5px 20px rgba(0,0,0,0.2); z-index: 500; display: flex; flex-direction: column; }
+
+/* Match Modal (blocking; only close via X or Message) */
+.match-modal { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; pointer-events: none; }
+.match-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(3px); }
+.match-card {
+  position: relative;
+  width: min(92vw, 560px);
+  background: #fff;
+  border-radius: 20px;
+  padding: 1.25rem 1.25rem 1.5rem;
+  box-shadow: 0 30px 80px rgba(0,0,0,.35);
+  animation: pop-in .18s ease-out;
+  pointer-events: all; /* only card is interactive */
+}
+@keyframes pop-in { from { transform: scale(.96); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+
+.match-close {
+  position: absolute; top: .5rem; right: .7rem;
+  width: 36px; height: 36px; border-radius: 50%;
+  border: none; background: transparent; color: #6A2C4A; font-size: 1.5rem; cursor: pointer;
+}
+
+.match-header { text-align: center; color: #6A2C4A; margin-top: .25rem; }
+.match-header h2 { margin: .25rem 0 0; font-size: 1.6rem; }
+.match-header p { margin: .25rem 0 0; color: #5a1f3d; font-weight: 600; }
+.match-emoji { font-size: 2rem; }
+
+.match-photos {
+  display: flex; align-items: center; justify-content: center;
+  gap: 1rem; margin: 1rem 0 1.25rem;
+}
+.match-photo { display: grid; justify-items: center; gap: .4rem; }
+.match-photo img {
+  width: 120px; height: 120px; object-fit: cover;
+  border-radius: 50%; border: 4px solid #fff; box-shadow: 0 8px 24px rgba(0,0,0,.15);
+  background: #f2f2f2;
+}
+.photo-label { font-size: .9rem; color: #333; font-weight: 600; }
+.vs { color: #6A2C4A; font-weight: 800; }
+
+.match-actions { display: flex; justify-content: center; gap: .75rem; }
+.match-btn {
+  padding: .8rem 1.2rem; border-radius: 999px; font-weight: 700; cursor: pointer; border: 2px solid transparent;
+}
+.match-btn.primary { background: #6A2C4A; color: #fff; }
+.match-btn.primary:hover { filter: brightness(1.05); }
 </style>
