@@ -22,7 +22,7 @@
         <h1>Discover Dogs</h1>
 
         <div class="header-actions">
-          <!-- NEW: Active dog selector -->
+          <!-- Active dog selector -->
           <div class="active-dog-select" v-if="myDogs.length">
             <label for="activeDog" class="sr-only">Choose your dog</label>
             <select id="activeDog" v-model="activeDogId" class="dog-select">
@@ -291,7 +291,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue' // >>> added watch
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
 import { createLike, createPass } from '../services/likes'
@@ -356,9 +356,7 @@ async function fetchMyDogs() {
 }
 
 /* ---------------- Per-dog dismissed/progress (local) ---------------- */
-// >>> NEW: keep independent progress per (user, activeDogId)
 const DISMISSED_PREFIX = 'discover_dismissed_v1'
-
 function dismissedKey() {
   if (!currentUser.value?.uid || !activeDogId.value) return ''
   return `${DISMISSED_PREFIX}:${currentUser.value.uid}:${activeDogId.value}`
@@ -411,7 +409,6 @@ onMounted(async () => {
   const ok = await ensureProfileExists()
   if (ok) await loadDogs()
 
-  // React only to sign-out after mount
   offAuth = onAuthStateChanged(auth, (u) => {
     if (!u) router.replace('/')
   })
@@ -539,43 +536,11 @@ function mapDogDocToCard(d) {
   }
 }
 
-// ---------- Load & Filter ----------
-
-// todo
-// load profiles in chunks from firebase queue
-// implement python script for ML queue sorting
-//    done periodically outside of user session
-//    maybe each night or each couple nights if made into automation
-//    likely behind paywall since itll be quite resource intensive if ALL users have it run
-//    for demo it will be free
-// toggle for default "random" or "ML sorted" queue
-// move geocoding from discover to profileview save
-//    if location stored is different from location being saved
-//    or if coords are missing
-//        use geocoding to get coords and store in profile
-//    otherwise skip geocoding
-//    check for this in filter for distance
-
-// matching logic
-// render profile from queue
-//
-// need load to use either our random or ml queue
-//
-// if we like that profile
-//    if they like our dog
-//       play match animation
-//       start message conversation
-//    else
-//       add their profile id to our list of likes
-// if skip
-//    add profile id to our list of skips
-// render next profile from queue
-
+/* ---------------- Load & Filter ---------------- */
 async function loadDogs() {
   isFiltering.value = true
   try {
     const docs = await listDogs({ onlyWithPhotos: false, max: 50, breed: filters.breed || undefined })
-    // >>> filter out already dismissed for the current active dog
     const dismissed = new Set(loadDismissed())
     const base = excludeMyDogs(docs.map(mapDogDocToCard))
     dogs.value = base.filter(d => !dismissed.has(d.id))
@@ -623,7 +588,6 @@ const applyFilters = async () => {
       filteredDogs = out
     }
 
-    // >>> filter out cards dismissed for current active dog
     const dismissed = new Set(loadDismissed())
     filteredDogs = filteredDogs.filter(d => !dismissed.has(d.id))
 
@@ -646,11 +610,15 @@ const resetFilters = () => {
 
 /* ---------------- Deck actions ---------------- */
 const passDog = async () => {
-
   if (dogs.value.length === 0) return
+  if (!activeDogId.value) {
+    alert('Choose which of your dogs is passing first.')
+    return
+  }
+
   const passedDog = dogs.value.shift()
-  if (d) markDismissed(d.id) // >>> remember the dismissal for this active dog
-  
+  if (passedDog) markDismissed(passedDog.id)
+
   try {
     await createPass({
       toDogId: passedDog.id,
@@ -684,10 +652,10 @@ const likeDog = async () => {
   }
 
   const likedDog = dogs.value.shift()
-  if (likedDog) markDismissed(likedDog.id) // >>> mark as handled in this deck
+  if (!likedDog) return
+  markDismissed(likedDog.id)
 
   try {
-    // include the activeDogId as fromDogId
     await createLike({
       toDogId: likedDog.id,
       toDogOwnerId: likedDog.ownerId,
@@ -697,7 +665,7 @@ const likeDog = async () => {
     console.error('Like failed:', e)
   }
 
-  // demo match logic (unchanged)
+  // demo match logic (replace with real server-side matching later)
   const isMatch = checkForMatch(likedDog)
   if (isMatch) {
     matches.value.push(likedDog)
@@ -715,9 +683,7 @@ const likeDog = async () => {
   }
 }
 
-// update from hardcoded to checking db for match
 const checkForMatch = (dog) => {
-  // demo logic; replace with real server-side matching later
   const tangoBreed = 'Golden Retriever'
   const tangoSex = 'male'
   const tangoAge = 3
@@ -727,7 +693,6 @@ const checkForMatch = (dog) => {
 }
 
 /* ---------------- React when switching active dog ---------------- */
-// >>> When the user selects a different of their dogs, reload the deck for that dog
 watch(activeDogId, async (newId, oldId) => {
   if (!newId || newId === oldId) return
   isDragging.value = false
@@ -749,6 +714,18 @@ const goToMatches = () => { router.push('/matches'); showMenu.value = false }
 const goToSettings = () => { router.push('/settings'); showMenu.value = false }
 
 /* ---------------- Chat (demo) ---------------- */
+const getRandomResponse = () => {
+  const responses = [
+    "That's wonderful! When would be a good time to meet?",
+    "I'm so excited! Tango sounds like a perfect match for my dog.",
+    "Do you have any questions about her health records?",
+    "She loves playing fetch and going on long walks!",
+    "I can send you more photos if you'd like to see them.",
+    "She's been socialized with other dogs since she was a puppy."
+  ]
+  return responses[Math.floor(Math.random() * responses.length)]
+}
+
 const sendMessage = () => {
   if (!newMessage.value.trim()) return
   chatMessages.value.push({ id: Date.now(), sender: 'You', message: newMessage.value, timestamp: new Date() })
