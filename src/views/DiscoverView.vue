@@ -294,7 +294,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue' // >>> added watch
 import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
-import { createLike } from '../services/likes'
+import { createLike, createPass } from '../services/likes'
 import { collection, query, where, limit, getDocs } from 'firebase/firestore'
 import { db, auth } from '../lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
@@ -645,10 +645,21 @@ const resetFilters = () => {
 }
 
 /* ---------------- Deck actions ---------------- */
-const passDog = () => {
+const passDog = async () => {
+
   if (dogs.value.length === 0) return
-  const d = dogs.value.shift()
+  const passedDog = dogs.value.shift()
   if (d) markDismissed(d.id) // >>> remember the dismissal for this active dog
+  
+  try {
+    await createPass({
+      toDogId: passedDog.id,
+      toDogOwnerId: passedDog.ownerId,
+      fromDogId: activeDogId.value
+    })
+  } catch (e) {
+    console.error('Pass failed:', e)
+  }
 }
 
 /* ---------------- Matches (local demo) ---------------- */
