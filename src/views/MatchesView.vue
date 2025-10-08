@@ -4,10 +4,7 @@
       <h1>Matches</h1>
       <div class="header-actions">
         <button class="btn" @click="goDiscover">Discover</button>
-        <button class="btn outline" @click="refreshMatches" :disabled="loading">
-          <span v-if="loading">Refreshing...</span>
-          <span v-else>Refresh</span>
-        </button>
+
         <button
           class="btn danger"
           @click="clearAll"
