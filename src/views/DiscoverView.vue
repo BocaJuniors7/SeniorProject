@@ -333,7 +333,7 @@ import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { listDogs } from '../services/dogs'
 import { createLike, createPass } from '../services/likes'
-import { collection, query, where, limit, getDocs } from 'firebase/firestore'
+import { collection, query, where, limit, getDocs, onSnapshot } from 'firebase/firestore'
 import { db, auth } from '../lib/firebase'
 import { onAuthStateChanged } from 'firebase/auth'
 
@@ -379,26 +379,41 @@ const myDogs = ref([])          // [{id, name, image}]
 const activeDogId = ref('')     // id of the dog that will be used as fromDogId
 const activeDog = computed(() => myDogs.value.find(d => d.id === activeDogId.value) || null)
 
-async function fetchMyDogs() {
-  if (!currentUser.value?.uid) return
-  const q = query(collection(db, 'dogs'), where('ownerId', '==', currentUser.value.uid))
-  const snap = await getDocs(q)
-  myDogs.value = snap.docs.map(d => {
-    const data = d.data()
-    return {
-      id: d.id,
-      name: data.name || 'Unnamed',
-      image: Array.isArray(data.gallery) && data.gallery.length ? data.gallery[0] :
-             Array.isArray(data.photos) && data.photos.length ? (typeof data.photos[0] === 'string' ? data.photos[0] : data.photos[0]?.url || '') : ''
+/* Live listener to user's dogs to keep gate accurate */
+let offDogs = null
+function watchMyDogs(userUid) {
+  if (offDogs) { offDogs(); offDogs = null }
+  const qDogs = query(collection(db, 'dogs'), where('ownerId', '==', userUid))
+  offDogs = onSnapshot(qDogs, (snap) => {
+    const list = snap.docs.map(d => {
+      const data = d.data()
+      return {
+        id: d.id,
+        name: data.name || 'Unnamed',
+        image: Array.isArray(data.gallery) && data.gallery.length ? data.gallery[0] :
+               Array.isArray(data.photos) && data.photos.length ? (typeof data.photos[0] === 'string' ? data.photos[0] : data.photos[0]?.url || '') : ''
+      }
+    })
+    myDogs.value = list
+    hasProfile.value = list.length > 0
+
+    // If no dogs remain, clear active dog & deck (gate shows automatically)
+    if (!hasProfile.value) {
+      activeDogId.value = ''
+      dogs.value = []
+    } else {
+      // Select a default active dog if none
+      if (!activeDogId.value || !list.some(d => d.id === activeDogId.value)) {
+        activeDogId.value = list[0].id
+        // fresh deck on first dog or after switching last deleted
+        loadDogs()
+      }
     }
   })
-  if (!activeDogId.value && myDogs.value.length) activeDogId.value = myDogs.value[0].id
 }
 
 /* ---------------- Per-dog hidden & passed lists (local) ---------------- */
-/** Keep name for compatibility with MatchesView undismiss: this is the "hidden" list used to remove from deck now. */
 const DISMISSED_PREFIX = 'discover_dismissed_v1'   // hidden list (passed + liked)
-/** New: strictly the "passed" list to restore later. */
 const PASSED_PREFIX = 'discover_passed_v1'
 
 function keyFor(prefix) {
@@ -470,29 +485,40 @@ async function ensureProfileExists () {
   }
 
   currentUser.value = { uid: u.uid }
+
+  // Quick one-time check to end the spinner fast
   const qRef = query(collection(db, 'dogs'), where('ownerId', '==', u.uid), limit(1))
   const snap = await getDocs(qRef)
   hasProfile.value = !snap.empty
   checkingProfile.value = false
 
+  // Start real-time watch to keep gate accurate after create/delete
+  watchMyDogs(u.uid)
+
+  // If they already have a dog, load deck now
   if (hasProfile.value) {
-    await fetchMyDogs()
+    loadDogs()
   }
+
   return hasProfile.value
 }
 
 let offAuth = null
 onMounted(async () => {
   const ok = await ensureProfileExists()
-  if (ok) await loadDogs()
 
   offAuth = onAuthStateChanged(auth, (u) => {
-    if (!u) router.replace('/')
+    if (!u) {
+      router.replace('/')
+      // clean listeners
+      if (offDogs) { offDogs(); offDogs = null }
+    }
   })
 })
 
 onUnmounted(() => {
   if (offAuth) { offAuth(); offAuth = null }
+  if (offDogs) { offDogs(); offDogs = null }
 })
 
 /* ---------------- Helpers ---------------- */
@@ -615,6 +641,10 @@ function mapDogDocToCard(d) {
 
 /* ---------------- Load & Filter ---------------- */
 async function loadDogs() {
+  if (!hasProfile.value || !activeDogId.value) {
+    dogs.value = []
+    return
+  }
   isFiltering.value = true
   try {
     const docs = await listDogs({ onlyWithPhotos: false, max: 50, breed: filters.breed || undefined })
@@ -630,6 +660,7 @@ async function loadDogs() {
 }
 
 const applyFilters = async () => {
+  if (!hasProfile.value || !activeDogId.value) return
   isFiltering.value = true
   const base = await listDogs({
     breed: filters.breed || undefined,
@@ -875,6 +906,8 @@ const closeMatchModal = () => {
   showMatchModal.value = false
   document.documentElement.style.overflow = ''
 }
+
+
 </script>
 
 <style scoped>
@@ -922,6 +955,51 @@ const closeMatchModal = () => {
   cursor: pointer;
 }
 .filters-btn:hover { background: rgba(255,255,255,.12); }
+
+/* Profile gate overlay */
+.profile-gate {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at top, rgba(106,44,74,0.9), rgba(106,44,74,0.95));
+  display: grid;
+  place-items: center;
+  z-index: 2000;
+  padding: 2rem;
+  color: white;
+}
+.gate-card {
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 20px;
+  padding: 2rem 2.5rem;
+  max-width: 520px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.gate-icon { font-size: 3rem; margin-bottom: .75rem }
+.gate-card h2 { margin: 0 0 .5rem 0; font-size: 1.6rem; }
+.gate-card p { margin: 0 0 1.25rem 0; opacity: 0.9; }
+.gate-btn {
+  background: #fff;
+  color: #6A2C4A;
+  border: none;
+  padding: .9rem 1.25rem;
+  font-weight: 700;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.gate-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,0.25) }
+
+/* small “checking” state */
+.checking-gate {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  color: #6A2C4A;
+  font-weight: 600;
+}
 
 .filters-panel {
   background: white;
