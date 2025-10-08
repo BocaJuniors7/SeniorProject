@@ -4,17 +4,7 @@
       <h1>Matches</h1>
       <div class="header-actions">
         <button class="btn" @click="goDiscover">Discover</button>
-        <button class="btn outline" @click="refreshMatches" :disabled="loading">
-          <span v-if="loading">Refreshing...</span>
-          <span v-else>Refresh</span>
-        </button>
-        <button
-          class="btn danger"
-          @click="clearAll"
-          :disabled="matches.length === 0"
-        >
-          Clear All
-        </button>
+        <!-- Clear All removed -->
       </div>
     </header>
 
@@ -29,7 +19,8 @@
       <div v-for="m in sortedMatches" :key="m.id" class="card">
         <div class="image-wrap">
           <img :src="m.image" :alt="m.name" />
-          <button class="remove-btn" @click="removeMatch(m.id)">×</button>
+          <!-- open confirm popup instead of immediate unmatch -->
+          <button class="remove-btn" @click="openUnmatchConfirm(m)" :disabled="busyIds.has(m.id)">×</button>
         </div>
 
         <div class="info">
@@ -44,9 +35,11 @@
             <button class="btn" @click="router.push({ name: 'messages' })">
               Message
             </button>
+
             <button class="btn outline" @click="viewProfile(m)">
               View Profile
             </button>
+
           </div>
 
           <div class="time" v-if="m.matchedAt">
@@ -63,7 +56,6 @@
       <div class="preview-card">
         <button class="close-x" @click="closeProfilePreview">×</button>
 
-        <!-- Top image (like Discover) -->
         <div class="card-image">
           <img :src="profileDog?.image || '/placeholder.png'" :alt="profileDog?.name || 'Dog'" />
           <div class="card-overlay">
@@ -81,7 +73,6 @@
           </div>
         </div>
 
-        <!-- Scrollable details (Discover layout) -->
         <div class="card-details">
           <div class="info-section">
             <div class="detail-row" v-if="profileDog?.sex">
@@ -154,11 +145,30 @@
               <span class="value">{{ profileDog.travelDistance }} miles</span>
             </div>
           </div>
-
         </div>
       </div>
     </div>
     <!-- /Profile Preview Modal -->
+
+    <!-- Unmatch Confirm Modal -->
+    <div v-if="confirmOpen" class="confirm-modal">
+      <div class="confirm-backdrop" @click="closeConfirm"></div>
+      <div class="confirm-card" role="dialog" aria-modal="true">
+        <h3>Unmatch</h3>
+        <p>
+          Are you sure you want to unmatch with
+          <strong>{{ confirmTarget?.name }}</strong>?
+        </p>
+        <div class="confirm-actions">
+          <button class="btn outline" @click="closeConfirm">Cancel</button>
+          <button class="btn danger" :disabled="confirmBusy" @click="confirmUnmatch">
+            <span v-if="confirmBusy">Unmatching…</span>
+            <span v-else>Unmatch</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- /Unmatch Confirm Modal -->
   </div>
 </template>
 
@@ -169,6 +179,7 @@ import {
   collection,
   getDocs,
   getDoc,
+  deleteDoc,
   doc,
   query,
   where
@@ -179,12 +190,35 @@ import { auth, db } from '../lib/firebase'
 const router = useRouter()
 const matches = ref([])
 const loading = ref(false)
+const busyIds = ref(new Set()) // track per-card busy state
 const currentDogId = ref(null)
 const currentUser = ref(null)
 
 /* Preview modal state */
 const profileOpen = ref(false)
 const profileDog = ref(null)
+
+/* Confirm modal state */
+const confirmOpen = ref(false)
+const confirmTarget = ref(null)
+const confirmBusy = ref(false)
+
+/* Discover "dismissed" key so the dog can reappear after unmatch */
+const DISMISSED_PREFIX = 'discover_dismissed_v1'
+function dismissedKey(uid, dogId) {
+  if (!uid || !dogId) return ''
+  return `${DISMISSED_PREFIX}:${uid}:${dogId}`
+}
+function undismissFromDiscover(otherDogId) {
+  // Remove otherDogId from the dismissed list for THIS currentDogId
+  const k = dismissedKey(currentUser.value?.uid, currentDogId.value)
+  if (!k) return
+  try {
+    const arr = JSON.parse(localStorage.getItem(k) || '[]')
+    const next = arr.filter(id => id !== otherDogId)
+    localStorage.setItem(k, JSON.stringify(next))
+  } catch {}
+}
 
 /* Helpers reused from Discover */
 const certDisplay = (cert) => {
@@ -298,12 +332,6 @@ async function refreshMatches() {
   await loadMatches(currentUser.value)
 }
 
-function removeMatch(id) {
-  matches.value = matches.value.filter(m => m.id !== id)
-}
-function clearAll() {
-  matches.value = []
-}
 function goDiscover() {
   router.push('/discover')
 }
@@ -337,7 +365,6 @@ async function viewProfile(m) {
         image
       }
     } else {
-      // fallback to minimal card data
       profileDog.value = { ...m }
     }
     profileOpen.value = true
@@ -351,6 +378,72 @@ async function viewProfile(m) {
 function closeProfilePreview() {
   profileOpen.value = false
 }
+
+/* ----- Unmatch flow: open confirm → delete like → update UI → restore to Discover ----- */
+function openUnmatchConfirm(m) {
+  if (busyIds.value.has(m.id)) return
+  confirmTarget.value = m
+  confirmOpen.value = true
+}
+function closeConfirm(force = false) {
+  if (confirmBusy.value && !force) return
+  confirmOpen.value = false
+  confirmTarget.value = null
+}
+
+// replace your existing confirmUnmatch with this:
+async function confirmUnmatch() {
+  if (!confirmTarget.value || !currentUser.value?.uid || !currentDogId.value) return
+  const m = confirmTarget.value
+  confirmBusy.value = true
+  busyIds.value.add(m.id)
+
+  try {
+    // Try strict query first (may require composite index)
+    let likeDocIds = []
+    try {
+      const q1 = query(
+        collection(db, 'likes'),
+        where('ownerId', '==', currentUser.value.uid),
+        where('fromDogId', '==', currentDogId.value),
+        where('toDogId', '==', m.id)
+      )
+      const s1 = await getDocs(q1)
+      likeDocIds = s1.docs.map(d => d.id)
+    } catch (e) {
+      // Fallback: two-field query + client-side filter
+      const q2 = query(
+        collection(db, 'likes'),
+        where('ownerId', '==', currentUser.value.uid),
+        where('fromDogId', '==', currentDogId.value)
+      )
+      const s2 = await getDocs(q2)
+      likeDocIds = s2.docs.filter(d => d.data().toDogId === m.id).map(d => d.id)
+    }
+
+    // Delete any likes we found (breaks the match)
+    for (const id of likeDocIds) {
+      await deleteDoc(doc(db, 'likes', id))
+    }
+
+    // Update UI list
+    matches.value = matches.value.filter(x => x.id !== m.id)
+
+    // Let them reappear in Discover for THIS active dog
+    undismissFromDiscover(m.id)
+
+    // ✅ close the popup now
+    confirmBusy.value = false
+    closeConfirm(true) // force close even if something still marked busy
+  } catch (e) {
+    console.error('Failed to unmatch:', e)
+    alert('Sorry, failed to unmatch. Please try again.')
+    confirmBusy.value = false // re-enable buttons so user can retry
+  } finally {
+    busyIds.value.delete(m.id)
+  }
+}
+
 
 function timeAgo(ts) {
   const diff = Date.now() - Number(ts)
@@ -427,6 +520,11 @@ onBeforeUnmount(() => {
   color: #b40000;
   border-color: #ffefef;
 }
+.btn.danger.outline {
+  background: transparent;
+  color: #b40000;
+  border-color: #ffefef;
+}
 .btn.outline {
   background: transparent;
   color: #6A2C4A;
@@ -476,6 +574,7 @@ onBeforeUnmount(() => {
   background: rgba(0,0,0,.55);
   cursor: pointer;
 }
+.remove-btn:disabled { opacity: .6; cursor: not-allowed; }
 .info {
   padding: .9rem;
   display: grid;
@@ -548,19 +647,16 @@ onBeforeUnmount(() => {
 .cert-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
 .cert-badge { background: #6A2C4A; color: white; padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; font-weight: 500; }
 
-.medical-papers { display: flex; flex-direction: column; gap: 0.5rem; }
-.paper-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; background: #f8f9fa; border-radius: 6px; }
-.paper-info { display: flex; flex-direction: column; gap: 0.1rem; }
-.paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
-.paper-date { font-size: 0.7rem; color: #666; }
-
-.preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-.preference-item .label { font-size: 0.8rem; }
-.preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
-
-.profile-actions { display: flex; justify-content: flex-end; gap: .5rem; }
-.preview-close {
-  background: #6A2C4A; color: #fff; border: none; border-radius: 999px; padding: .45rem .8rem; cursor: pointer;
+/* === Unmatch confirm modal === */
+.confirm-modal { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; }
+.confirm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+.confirm-card {
+  position: relative; z-index: 1;
+  width: min(92vw, 380px);
+  background: #fff; border-radius: 16px; padding: 1rem 1.1rem 1.1rem;
+  box-shadow: 0 20px 60px rgba(0,0,0,.25);
 }
-.preview-close:hover { opacity: .9; }
+.confirm-card h3 { margin: 0 0 .4rem 0; color: #6A2C4A; }
+.confirm-card p { margin: 0 0 .9rem 0; color: #333; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 </style>

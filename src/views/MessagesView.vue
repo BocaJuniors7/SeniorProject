@@ -220,7 +220,7 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db } from '../lib/firebase'
 import {
   collection, getDocs, getDoc, addDoc, updateDoc, doc, query, where,
-  orderBy, onSnapshot, serverTimestamp
+  orderBy, onSnapshot, serverTimestamp, writeBatch, limit
 } from 'firebase/firestore'
 
 const router = useRouter()
@@ -369,22 +369,29 @@ function subscribeThreadsForDog(myDogId) {
     for (const docSnap of snap.docs) {
       const t = docSnap.data()
       const threadId = docSnap.id
-      const otherDogId = (t.members || []).find(d => d !== myDogId)
-      const otherDog = otherDogId ? await getDogProfile(otherDogId) : null
+      const otherDogId = otherMemberId(t.members, myDogId)
+      if (!otherDogId) continue
 
+      // 🔒 Auto-delete the thread if the match is broken
+      // (best-effort; ignores errors silently)
+      try {
+        const deleted = await purgeIfUnmatched(threadId, myDogId, otherDogId)
+        if (deleted) continue // skip rendering this thread
+      } catch {}
+
+      const otherDog = await getDogProfile(otherDogId)
       const lastTs = t.lastMessageAt?.toMillis ? t.lastMessageAt.toMillis() : 0
       const lastText = t.lastMessageText || ''
       const lastReadTs = t.lastReadAtBy?.[myDogId]?.toMillis?.() || 0
       const unread = lastTs && lastTs > lastReadTs ? 1 : 0
 
-      if (otherDog) {
-        items.push({ threadId, dog: otherDog, lastText, lastTs, unread })
-      }
+      if (otherDog) items.push({ threadId, dog: otherDog, lastText, lastTs, unread })
     }
     items.sort((a,b)=> (b.lastTs||0) - (a.lastTs||0))
     threadConvos.value = items
   })
 }
+
 
 // ----- Messages (listening) -----
 let unsubscribeMessages = null
@@ -452,6 +459,7 @@ async function openConversation(key) {
   const item = conversations.value.find(c => c.key === key)
   if (!item) return
 
+  // Resolve threadId (create if “new”)
   if (item.type === 'new') {
     const tid = await ensureThread(item.dog.id)
     selectedConvKey.value = `t:${tid}`
@@ -461,9 +469,22 @@ async function openConversation(key) {
     selectedThreadId.value = item.threadId
   }
 
+  // 🔒 Guard: if the match is gone, purge now and bail
+  try {
+    const myId = currentDogId.value
+    const otherId = item.dog.id
+    const tid = selectedThreadId.value
+    if (myId && otherId && tid) {
+      const deleted = await purgeIfUnmatched(tid, myId, otherId)
+      if (deleted) return
+    }
+  } catch {}
+
+  // Normal flow
   subscribeMessages(selectedThreadId.value)
   await markThreadRead(selectedThreadId.value)
 }
+
 
 // ----- Sending -----
 async function sendChatMessage() {
@@ -536,6 +557,75 @@ function closeProfilePreview() { profileOpen.value = false }
 
 
 /* Helpers reused from Discover layout */
+/** Check if two dogs are still matched (reciprocal like exists). */
+function otherMemberId(members = [], myDogId) {
+  return (members || []).find(id => id !== myDogId) || null
+}
+
+async function areDogsStillMatched(dogAId, dogBId) {
+  // dogA → dogB
+  const s1 = await getDocs(
+    query(collection(db, 'likes'),
+      where('fromDogId', '==', dogAId),
+      where('toDogId', '==', dogBId),
+      limit(1)
+    )
+  )
+  if (s1.empty) return false
+
+  // dogB → dogA
+  const s2 = await getDocs(
+    query(collection(db, 'likes'),
+      where('fromDogId', '==', dogBId),
+      where('toDogId', '==', dogAId),
+      limit(1)
+    )
+  )
+  return !s2.empty
+}
+
+/** Find the threadId for a pair, if it exists. */
+async function findThreadIdForPair(dogAId, dogBId) {
+  const membersKey = [dogAId, dogBId].sort().join('_')
+  const s = await getDocs(
+    query(collection(db, 'threads'), where('membersKey', '==', membersKey), limit(1))
+  )
+  return s.empty ? null : s.docs[0].id
+}
+
+/** Delete all messages in a thread, then delete the thread doc itself. */
+async function deleteThreadAndMessages(threadId) {
+  if (!threadId) return
+  // Batch delete messages (in chunks if needed)
+  while (true) {
+    const msgsSnap = await getDocs(
+      query(collection(db, 'threads', threadId, 'messages'), limit(200))
+    )
+    if (msgsSnap.empty) break
+    const batch = writeBatch(db)
+    msgsSnap.forEach(d => batch.delete(d.ref))
+    await batch.commit()
+  }
+  // Finally delete the thread doc
+  await updateDoc(doc(db, 'threads', threadId), { lastMessageText: '' }).catch(()=>{})
+  await import('firebase/firestore').then(m => m.deleteDoc(doc(db, 'threads', threadId)))
+}
+
+/** Ensure a thread still has a match; if not, purge it and return true if deleted. */
+async function purgeIfUnmatched(threadId, myDogId, otherDogId) {
+  const stillMatched = await areDogsStillMatched(myDogId, otherDogId)
+  if (stillMatched) return false
+  await deleteThreadAndMessages(threadId)
+  // If you currently have this thread open, clear the pane
+  if (selectedThreadId.value === threadId) {
+    selectedThreadId.value = null
+    selectedConvKey.value = null
+    chatMessages.value = []
+  }
+  return true
+}
+
+
 const certDisplay = (cert) => {
   const certMap = {
     'akc': 'AKC Registered',

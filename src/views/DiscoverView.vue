@@ -21,22 +21,19 @@
       <header class="discover-header">
         <h1>Discover Dogs</h1>
 
-        <div class="header-actions">
-          <!-- Active dog selector -->
-          <div class="active-dog-select" v-if="myDogs.length">
-            <label for="activeDog" class="sr-only">Choose your dog</label>
-            <select id="activeDog" v-model="activeDogId" class="dog-select">
-              <option v-for="d in myDogs" :key="d.id" :value="d.id">
-                {{ d.name || 'Unnamed' }}
-              </option>
-            </select>
-          </div>
+        <!-- centered selector + label -->
+        <div class="header-center" v-if="myDogs.length">
+          <label for="activeDog" class="with-text">Discover with</label>
+          <select id="activeDog" v-model="activeDogId" class="dog-select">
+            <option v-for="d in myDogs" :key="d.id" :value="d.id">
+              {{ d.name || 'Unnamed' }}
+            </option>
+          </select>
+        </div>
 
-          <button @click="toggleFilters" class="filter-btn">
-            <svg class="filter-icon" viewBox="0 0 24 24">
-              <path fill="currentColor" d="M3 17h18v-2H3v2zm0-5h18V7H3v5zm0-7v2h18V5H3z"/>
-            </svg>
-          </button>
+        <!-- right side actions -->
+        <div class="header-right">
+          <button @click="toggleFilters" class="filters-btn">Filters</button>
         </div>
       </header>
 
@@ -87,7 +84,11 @@
           <div class="no-dogs-icon">🐕</div>
           <h3>No more dogs to discover!</h3>
           <p>Check back later for new profiles or adjust your filters.</p>
-          <button @click="resetFilters" class="btn btn-primary">Reset Filters</button>
+
+          <div class="no-dogs-actions">
+            <button @click="resetFilters" class="btn btn-primary">Reset Filters</button>
+            <button @click="replayPassedDogs" class="btn btn-secondary">Show Passed Dogs Again</button>
+          </div>
         </div>
 
         <div
@@ -232,7 +233,6 @@
       >
         <div class="match-backdrop"></div>
         <div class="match-card" role="document">
-          <!-- Only the top-right button OR Message will dismiss -->
           <button class="match-close" @click="closeMatchModal" aria-label="Close">×</button>
 
           <div class="match-header">
@@ -347,7 +347,7 @@ const currentUser = ref(null)
 const matches = ref([])
 const showMatchAnimation = ref(false)
 const matchedDog = ref(null)
-const showChat = ref(false)            // stays false when redirecting to /messages
+const showChat = ref(false)
 const chatMessages = ref([])
 const newMessage = ref('')
 const isFiltering = ref(false)
@@ -395,29 +395,66 @@ async function fetchMyDogs() {
   if (!activeDogId.value && myDogs.value.length) activeDogId.value = myDogs.value[0].id
 }
 
-/* ---------------- Per-dog dismissed/progress (local) ---------------- */
-const DISMISSED_PREFIX = 'discover_dismissed_v1'
-function dismissedKey() {
+/* ---------------- Per-dog hidden & passed lists (local) ---------------- */
+/** Keep name for compatibility with MatchesView undismiss: this is the "hidden" list used to remove from deck now. */
+const DISMISSED_PREFIX = 'discover_dismissed_v1'   // hidden list (passed + liked)
+/** New: strictly the "passed" list to restore later. */
+const PASSED_PREFIX = 'discover_passed_v1'
+
+function keyFor(prefix) {
   if (!currentUser.value?.uid || !activeDogId.value) return ''
-  return `${DISMISSED_PREFIX}:${currentUser.value.uid}:${activeDogId.value}`
+  return `${prefix}:${currentUser.value.uid}:${activeDogId.value}`
 }
+
+/* Hidden (dismissed) helpers */
 function loadDismissed() {
-  const k = dismissedKey()
+  const k = keyFor(DISMISSED_PREFIX)
   if (!k) return []
   try { return JSON.parse(localStorage.getItem(k) || '[]') } catch { return [] }
 }
 function saveDismissed(arr) {
-  const k = dismissedKey()
+  const k = keyFor(DISMISSED_PREFIX)
   if (!k) return
   localStorage.setItem(k, JSON.stringify(arr))
 }
-function markDismissed(dogId) {
-  if (!dogId) return
+function markDismissed(id) {
+  if (!id) return
   const arr = loadDismissed()
-  if (!arr.includes(dogId)) {
-    arr.push(dogId)
-    saveDismissed(arr)
-  }
+  if (!arr.includes(id)) { arr.push(id); saveDismissed(arr) }
+}
+
+/* Passed helpers */
+function loadPassed() {
+  const k = keyFor(PASSED_PREFIX)
+  if (!k) return []
+  try { return JSON.parse(localStorage.getItem(k) || '[]') } catch { return [] }
+}
+function savePassed(arr) {
+  const k = keyFor(PASSED_PREFIX)
+  if (!k) return
+  localStorage.setItem(k, JSON.stringify(arr))
+}
+function markPassed(id) {
+  if (!id) return
+  const arr = loadPassed()
+  if (!arr.includes(id)) { arr.push(id); savePassed(arr) }
+}
+function clearPassed() {
+  const k = keyFor(PASSED_PREFIX)
+  if (!k) return
+  localStorage.removeItem(k)
+}
+
+/* Restore only passed dogs (not liked ones) */
+async function replayPassedDogs() {
+  const passed = loadPassed()
+  if (!passed.length) { await loadDogs(); return }
+
+  const hidden = new Set(loadDismissed())
+  for (const id of passed) hidden.delete(id) // unhide just the passed ones
+  saveDismissed(Array.from(hidden))
+  clearPassed()
+  await loadDogs()
 }
 
 /* ---------------- Auth/Profile Gate ---------------- */
@@ -581,9 +618,9 @@ async function loadDogs() {
   isFiltering.value = true
   try {
     const docs = await listDogs({ onlyWithPhotos: false, max: 50, breed: filters.breed || undefined })
-    const dismissed = new Set(loadDismissed())
+    const hidden = new Set(loadDismissed()) // treat as hidden list
     const base = excludeMyDogs(docs.map(mapDogDocToCard))
-    dogs.value = base.filter(d => !dismissed.has(d.id))
+    dogs.value = base.filter(d => !hidden.has(d.id))
   } catch (e) {
     console.error(e)
     filterError.value = 'Failed to load dogs'
@@ -628,8 +665,8 @@ const applyFilters = async () => {
       filteredDogs = out
     }
 
-    const dismissed = new Set(loadDismissed())
-    filteredDogs = filteredDogs.filter(d => !dismissed.has(d.id))
+    const hidden = new Set(loadDismissed())
+    filteredDogs = filteredDogs.filter(d => !hidden.has(d.id))
 
     dogs.value = filteredDogs
   } catch (error) {
@@ -664,7 +701,6 @@ function addMatchToStorage(dog) {
 /* ---------------- Firestore reciprocal like check ---------------- */
 async function hasReciprocalLike(otherDogId, myDogId) {
   try {
-    // Try schema with a 'type' or 'kind' field indicating 'like'
     let snap = await getDocs(
       query(
         collection(db, 'likes'),
@@ -676,7 +712,6 @@ async function hasReciprocalLike(otherDogId, myDogId) {
     )
     if (!snap.empty) return true
 
-    // Try 'kind' instead of 'type'
     snap = await getDocs(
       query(
         collection(db, 'likes'),
@@ -688,7 +723,6 @@ async function hasReciprocalLike(otherDogId, myDogId) {
     )
     if (!snap.empty) return true
 
-    // Fallback: any doc from otherDog -> myDog counts as a like
     snap = await getDocs(
       query(
         collection(db, 'likes'),
@@ -713,7 +747,11 @@ const passDog = async () => {
   }
 
   const passedDog = dogs.value.shift()
-  if (passedDog) markDismissed(passedDog.id)
+  if (passedDog) {
+    // hide now AND remember as "passed" for restore
+    markDismissed(passedDog.id)
+    markPassed(passedDog.id)
+  }
 
   try {
     await createPass({
@@ -726,7 +764,6 @@ const passDog = async () => {
   }
 }
 
-/* ---------------- Like / Match ---------------- */
 const likeDog = async () => {
   if (dogs.value.length === 0) return
   if (!activeDogId.value) {
@@ -736,6 +773,8 @@ const likeDog = async () => {
 
   const likedDog = dogs.value.shift()
   if (!likedDog) return
+
+  // hide now, but DO NOT add to "passed" list
   markDismissed(likedDog.id)
 
   let res = null
@@ -749,9 +788,6 @@ const likeDog = async () => {
     console.error('Like failed:', e)
   }
 
-  // Determine if it's a match:
-  // 1) Service returns a flag (isMatch/match) OR
-  // 2) We find a reciprocal like in Firestore
   let isMatch = false
   if (res && (res.isMatch === true || res.match === true)) {
     isMatch = true
@@ -764,12 +800,10 @@ const likeDog = async () => {
     addMatchToStorage(likedDog)
     matchedDog.value = likedDog
 
-    // Brief celebration, then force modal (blocking)
     showMatchAnimation.value = true
     setTimeout(() => {
       showMatchAnimation.value = false
       showMatchModal.value = true
-      // Lock scroll while modal open
       document.documentElement.style.overflow = 'hidden'
     }, 700)
   }
@@ -825,12 +859,9 @@ const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString([], { h
 const startChatWithMatch = () => {
   const withId = matchedDog.value?.id
   showMatchModal.value = false
-  document.documentElement.style.overflow = '' // unlock scroll
-  // ensure no corner chat appears
+  document.documentElement.style.overflow = ''
   showChat.value = false
   chatMessages.value = []
-  // optional: clear matchedDog to avoid accidental reuse
-  // matchedDog.value = null
 
   if (withId) {
     router.push({ path: '/messages', query: { with: withId, fromDog: activeDogId.value } })
@@ -842,7 +873,7 @@ const startChatWithMatch = () => {
 // Close modal via top-right only (continue browsing)
 const closeMatchModal = () => {
   showMatchModal.value = false
-  document.documentElement.style.overflow = '' // unlock scroll
+  document.documentElement.style.overflow = ''
 }
 </script>
 
@@ -855,22 +886,21 @@ const closeMatchModal = () => {
   position: relative;
 }
 
-/* Header + Active dog selector */
+/* Header with centered selector and right-aligned filters button */
 .discover-header {
   background: #6A2C4A;
   color: white;
   padding: 1rem 2rem;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   position: sticky;
   top: 0;
   z-index: 100;
 }
 .discover-header h1 { font-size: 1.5rem; margin: 0; }
-.header-actions { display: flex; gap: 0.75rem; align-items: center; }
-
-.active-dog-select { display: flex; align-items: center; }
+.header-center { justify-self: center; display: flex; align-items: center; gap: .5rem; }
+.with-text { font-weight: 700; opacity: .95; }
 .dog-select {
   appearance: none;
   background: white;
@@ -881,56 +911,17 @@ const closeMatchModal = () => {
   font-weight: 700;
   cursor: pointer;
 }
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-
-.filter-btn { background: none; border: none; color: white; cursor: pointer; padding: 0.5rem; border-radius: 50%; transition: background-color 0.3s ease; }
-.filter-btn:hover { background: rgba(255, 255, 255, 0.1); }
-.filter-icon { width: 24px; height: 24px; }
-
-/* Profile gate overlay */
-.profile-gate {
-  position: fixed;
-  inset: 0;
-  background: radial-gradient(ellipse at top, rgba(106,44,74,0.9), rgba(106,44,74,0.95));
-  display: grid;
-  place-items: center;
-  z-index: 2000;
-  padding: 2rem;
-  color: white;
-}
-.gate-card {
-  background: rgba(255,255,255,0.1);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255,255,255,0.25);
-  border-radius: 20px;
-  padding: 2rem 2.5rem;
-  max-width: 520px;
-  text-align: center;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-}
-.gate-icon { font-size: 3rem; margin-bottom: .75rem }
-.gate-card h2 { margin: 0 0 .5rem 0; font-size: 1.6rem; }
-.gate-card p { margin: 0 0 1.25rem 0; opacity: 0.9; }
-.gate-btn {
-  background: #fff;
-  color: #6A2C4A;
-  border: none;
-  padding: .9rem 1.25rem;
-  font-weight: 700;
+.header-right { justify-self: end; }
+.filters-btn {
+  background: transparent;
+  color: #fff;
+  border: 2px solid #fff;
   border-radius: 999px;
+  padding: .45rem .9rem;
+  font-weight: 700;
   cursor: pointer;
-  transition: transform .15s ease, box-shadow .15s ease;
 }
-.gate-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,0,0,0.25) }
-
-/* small “checking” state */
-.checking-gate {
-  min-height: 60vh;
-  display: grid;
-  place-items: center;
-  color: #6A2C4A;
-  font-weight: 600;
-}
+.filters-btn:hover { background: rgba(255,255,255,.12); }
 
 .filters-panel {
   background: white;
@@ -1022,12 +1013,36 @@ const closeMatchModal = () => {
 .paper-name { font-weight: 600; color: #333; font-size: 0.85rem; }
 .paper-date { font-size: 0.7rem; color: #666; }
 
-.preference-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-.preference-item .label { font-size: 0.8rem; }
-.preference-item .value { font-size: 0.85rem; font-weight: 600; text-align: right; }
-
+/* No dogs state */
 .no-dogs { text-align: center; color: #666; }
 .no-dogs-icon { font-size: 4rem; margin-bottom: 1rem; }
+.no-dogs-actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: .5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Buttons (local) */
+.btn {
+  border-radius: 999px;
+  padding: .6rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.btn-primary {
+  background: #6A2C4A;
+  color: #fff;
+}
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-secondary {
+  background: #fff;
+  color: #6A2C4A;
+  border-color: #6A2C4A;
+}
+.btn-secondary:hover { background: rgba(106,44,74,.06); }
 
 .action-buttons {
   position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%);
@@ -1068,7 +1083,7 @@ const closeMatchModal = () => {
   padding: 1.25rem 1.25rem 1.5rem;
   box-shadow: 0 30px 80px rgba(0,0,0,.35);
   animation: pop-in .18s ease-out;
-  pointer-events: all; /* only card is interactive */
+  pointer-events: all;
 }
 @keyframes pop-in { from { transform: scale(.96); opacity: 0 } to { transform: scale(1); opacity: 1 } }
 
@@ -1102,4 +1117,15 @@ const closeMatchModal = () => {
 }
 .match-btn.primary { background: #6A2C4A; color: #fff; }
 .match-btn.primary:hover { filter: brightness(1.05); }
+
+/* Responsive header stacking */
+@media (max-width: 640px) {
+  .discover-header {
+    grid-template-columns: 1fr;
+    gap: .5rem;
+    text-align: center;
+  }
+  .header-center { justify-self: center; }
+  .header-right { justify-self: center; }
+}
 </style>
