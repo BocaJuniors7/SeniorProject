@@ -1,18 +1,40 @@
 <template>
   <div class="matches-page">
     <header class="matches-header">
-      <h1>Matches</h1>
+      <!-- Left: keep your title -->
+      <div class="left-spacer">
+        <h1>Matches</h1>
+      </div>
+
+      <!-- Center: "Matches for" + active dog selector (centered regardless of sides) -->
+      <div class="center-group">
+        <span class="center-text">Matches for</span>
+        <div class="active-dog-select" v-if="myDogs.length">
+          <label for="activeDog" class="sr-only">Choose your dog</label>
+          <select id="activeDog" v-model="activeDogId" class="dog-select">
+            <option v-for="d in myDogs" :key="d.id" :value="d.id">
+              {{ d.name || 'Unnamed' }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Right: your original Discover button -->
       <div class="header-actions">
         <button class="btn" @click="goDiscover">Discover</button>
-        <!-- Clear All removed -->
       </div>
     </header>
 
-    <div v-if="matches.length === 0" class="empty-state">
+    <div v-if="!loading && matches.length === 0" class="empty-state">
       <div class="emoji">🐾</div>
       <h3>No matches yet</h3>
       <p>Like some dogs in Discover to see them here.</p>
       <button class="btn primary" @click="goDiscover">Go to Discover</button>
+    </div>
+
+    <div v-else-if="loading" class="empty-state">
+      <div class="emoji">⏳</div>
+      <h3>Loading matches…</h3>
     </div>
 
     <div v-else class="grid">
@@ -20,7 +42,7 @@
         <div class="image-wrap">
           <img :src="m.image" :alt="m.name" />
           <!-- open confirm popup instead of immediate unmatch -->
-          <button class="remove-btn" @click="openUnmatchConfirm(m)" :disabled="busyIds.has(m.id)">×</button>
+          <button class="remove-btn" @click="openUnmatchConfirm(m)" :disabled="isBusy(m.id)">×</button>
         </div>
 
         <div class="info">
@@ -32,14 +54,13 @@
           <p class="owner" v-if="m.ownerName">Owner: {{ m.ownerName }}</p>
 
           <div class="actions">
-            <button class="btn" @click="router.push({ name: 'messages' })">
+            <button class="btn" :disabled="!activeDogId" @click="goMessage(m)">
               Message
             </button>
 
             <button class="btn outline" @click="viewProfile(m)">
               View Profile
             </button>
-
           </div>
 
           <div class="time" v-if="m.matchedAt">
@@ -173,8 +194,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import {
   collection,
   getDocs,
@@ -188,10 +209,17 @@ import { onAuthStateChanged } from 'firebase/auth'
 import { auth, db } from '../lib/firebase'
 
 const router = useRouter()
+const route = useRoute()
+
+/* Dogs & selection */
+const myDogs = ref([])              // [{id, name, image}]
+const activeDogId = ref('')         // which dog we are viewing matches for
+const activeDog = computed(() => myDogs.value.find(d => d.id === activeDogId.value) || null)
+
+/* Matches state */
 const matches = ref([])
 const loading = ref(false)
-const busyIds = ref(new Set()) // track per-card busy state
-const currentDogId = ref(null)
+const busyIds = ref(new Set())      // track per-card busy state
 const currentUser = ref(null)
 
 /* Preview modal state */
@@ -202,23 +230,6 @@ const profileDog = ref(null)
 const confirmOpen = ref(false)
 const confirmTarget = ref(null)
 const confirmBusy = ref(false)
-
-/* Discover "dismissed" key so the dog can reappear after unmatch */
-const DISMISSED_PREFIX = 'discover_dismissed_v1'
-function dismissedKey(uid, dogId) {
-  if (!uid || !dogId) return ''
-  return `${DISMISSED_PREFIX}:${uid}:${dogId}`
-}
-function undismissFromDiscover(otherDogId) {
-  // Remove otherDogId from the dismissed list for THIS currentDogId
-  const k = dismissedKey(currentUser.value?.uid, currentDogId.value)
-  if (!k) return
-  try {
-    const arr = JSON.parse(localStorage.getItem(k) || '[]')
-    const next = arr.filter(id => id !== otherDogId)
-    localStorage.setItem(k, JSON.stringify(next))
-  } catch {}
-}
 
 /* Helpers reused from Discover */
 const certDisplay = (cert) => {
@@ -235,15 +246,13 @@ const hasTrainingInfo = (dog) =>
   !!(dog?.trainingLevel || (dog?.certifications && dog.certifications.length) || dog?.trainingNotes)
 const hasPreferences = (dog) =>
   !!(dog?.lookingFor || dog?.preferredBreeds || dog?.minAgePref || dog?.maxAgePref || dog?.travelDistance)
-const agePreferenceDisplay = (dog) => {
-  const min = dog?.minAgePref
-  const max = dog?.maxAgePref
-  if (!min && !max) return 'No preference'
-  if (min && max) return `${min}-${max} years`
-  if (min) return `${min}+ years`
-  if (max) return `Up to ${max} years`
-  return 'Not specified'
-}
+const agePreferenceDisplay = (dog) =>
+  !dog ? 'Not specified'
+  : dog.minAgePref && dog.maxAgePref ? `${dog.minAgePref}-${dog.maxAgePref} years`
+  : dog.minAgePref ? `${dog.minAgePref}+ years`
+  : dog.maxAgePref ? `Up to ${dog.maxAgePref} years`
+  : 'No preference'
+
 function computeAgeYears(d) {
   if (d.age !== undefined && d.age !== null && d.age !== '') return d.age
   if (d.birthdate) {
@@ -257,41 +266,73 @@ const sortedMatches = computed(() =>
   [...matches.value].sort((a, b) => (b.matchedAt || 0) - (a.matchedAt || 0))
 )
 
-async function fetchMyDogId(userUid) {
+/* === Fetch my dogs === */
+async function fetchMyDogs(userUid) {
   const q = query(collection(db, 'dogs'), where('ownerId', '==', userUid))
   const snap = await getDocs(q)
-  if (!snap.empty) return snap.docs[0].id
-  return null
+  const list = snap.docs.map(d => {
+    const data = d.data()
+    const image =
+      (Array.isArray(data.gallery) && data.gallery[0]) ||
+      data.image || ''
+    return { id: d.id, name: data.name || 'Unnamed', image }
+  })
+  myDogs.value = list
+
+  // choose default active dog (route ?fromDog=… wins)
+  const fromDog = route.query.fromDog
+  if (fromDog && list.some(x => x.id === fromDog)) {
+    activeDogId.value = String(fromDog)
+  } else if (!activeDogId.value && list.length) {
+    activeDogId.value = list[0].id
+  }
 }
 
+/* Only count true "likes" if a type/kind field exists */
+const isLikeDoc = (data) => {
+  const t = (data?.type || data?.kind || '').toString().toLowerCase()
+  return t === '' || t === 'like'
+}
+
+/* === Fetch reciprocal matches for a given dog === */
 async function fetchReciprocalMatches(myDogId) {
+  if (!myDogId) return []
+
+  // likes we sent
   const likesByUsSnap = await getDocs(
     query(collection(db, 'likes'), where('fromDogId', '==', myDogId))
   )
-  const likedDogIds = likesByUsSnap.docs.map(d => d.data().toDogId)
+  const likedDogIds = likesByUsSnap.docs
+    .map(d => d.data())
+    .filter(isLikeDoc)
+    .map(d => d.toDogId)
+
   if (likedDogIds.length === 0) return []
 
+  // likes we received
   const likesToUsSnap = await getDocs(
     query(collection(db, 'likes'), where('toDogId', '==', myDogId))
   )
-  const theirLikes = likesToUsSnap.docs.map(d => d.data().fromDogId)
+  const theirLikes = likesToUsSnap.docs
+    .map(d => d.data())
+    .filter(isLikeDoc)
+    .map(d => d.fromDogId)
+
   const matchedDogIds = likedDogIds.filter(id => theirLikes.includes(id))
   if (matchedDogIds.length === 0) return []
 
+  // materialize dog cards
   const dogs = []
   for (const id of matchedDogIds) {
     const dogSnap = await getDoc(doc(db, 'dogs', id))
     if (dogSnap.exists()) {
       const data = dogSnap.data()
-
       const gallery = Array.isArray(data.gallery) ? data.gallery : []
-      const image =
-        gallery.length > 0 ? gallery[0] : data.image || '/placeholder.png'
-
+      const image = gallery.length > 0 ? gallery[0] : data.image || '/placeholder.png'
       dogs.push({
         id: dogSnap.id,
         name: data.name || 'Unnamed',
-        age: data.age || null,
+        age: computeAgeYears(data) || null,
         breed: data.breed || '',
         location: data.location || '',
         ownerName: data.ownerName || data.owner || '',
@@ -303,24 +344,20 @@ async function fetchReciprocalMatches(myDogId) {
       console.warn(`⚠️ Dog profile not found for ID ${id}`)
     }
   }
-
-  if (dogs.length === 0) {
-    console.log('⚠️ No reciprocal matches returned any profiles.')
-  }
   return dogs
 }
 
-async function loadMatches(user) {
+/* === Load matches for currently active dog === */
+async function loadMatchesForActiveDog() {
+  if (!currentUser.value || !activeDogId.value) {
+    matches.value = []
+    return
+  }
   loading.value = true
   try {
-    const myDog = await fetchMyDogId(user.uid)
-    currentDogId.value = myDog
-    if (!myDog) {
-      matches.value = []
-      return
-    }
-    matches.value = await fetchReciprocalMatches(myDog)
-  } catch {
+    matches.value = await fetchReciprocalMatches(activeDogId.value)
+  } catch (e) {
+    console.error('Failed to load matches:', e)
     matches.value = []
   } finally {
     loading.value = false
@@ -328,12 +365,16 @@ async function loadMatches(user) {
 }
 
 async function refreshMatches() {
-  if (!currentUser.value) return
-  await loadMatches(currentUser.value)
+  await loadMatchesForActiveDog()
 }
 
+/* === Navigation & Actions === */
 function goDiscover() {
   router.push('/discover')
+}
+function goMessage(m) {
+  // pass selected dog + matched dog id to messages page
+  router.push({ name: 'messages', query: { with: m.id, fromDog: activeDogId.value } })
 }
 
 /* OPEN PREVIEW instead of routing */
@@ -374,14 +415,29 @@ async function viewProfile(m) {
     profileOpen.value = true
   }
 }
-
 function closeProfilePreview() {
   profileOpen.value = false
 }
 
+/* Discover "dismissed" key so the dog can reappear after unmatch for THIS active dog */
+const DISMISSED_PREFIX = 'discover_dismissed_v1'
+function dismissedKey(uid, activeDogId) {
+  if (!uid || !activeDogId) return ''
+  return `${DISMISSED_PREFIX}:${uid}:${activeDogId}`
+}
+function undismissFromDiscover(otherDogId) {
+  const k = dismissedKey(currentUser.value?.uid, activeDogId.value)
+  if (!k) return
+  try {
+    const arr = JSON.parse(localStorage.getItem(k) || '[]')
+    const next = arr.filter(id => id !== otherDogId)
+    localStorage.setItem(k, JSON.stringify(next))
+  } catch {}
+}
+
 /* ----- Unmatch flow: open confirm → delete like → update UI → restore to Discover ----- */
 function openUnmatchConfirm(m) {
-  if (busyIds.value.has(m.id)) return
+  if (isBusy(m.id)) return
   confirmTarget.value = m
   confirmOpen.value = true
 }
@@ -390,38 +446,36 @@ function closeConfirm(force = false) {
   confirmOpen.value = false
   confirmTarget.value = null
 }
+const isBusy = (id) => busyIds.value.has(id)
 
-// replace your existing confirmUnmatch with this:
 async function confirmUnmatch() {
-  if (!confirmTarget.value || !currentUser.value?.uid || !currentDogId.value) return
+  if (!confirmTarget.value || !currentUser.value?.uid || !activeDogId.value) return
   const m = confirmTarget.value
   confirmBusy.value = true
   busyIds.value.add(m.id)
 
   try {
-    // Try strict query first (may require composite index)
+    // Try strict query first
     let likeDocIds = []
     try {
       const q1 = query(
         collection(db, 'likes'),
-        where('ownerId', '==', currentUser.value.uid),
-        where('fromDogId', '==', currentDogId.value),
+        where('fromDogId', '==', activeDogId.value),
         where('toDogId', '==', m.id)
       )
       const s1 = await getDocs(q1)
       likeDocIds = s1.docs.map(d => d.id)
     } catch (e) {
-      // Fallback: two-field query + client-side filter
+      // Fallback: just by fromDogId, filtered client-side
       const q2 = query(
         collection(db, 'likes'),
-        where('ownerId', '==', currentUser.value.uid),
-        where('fromDogId', '==', currentDogId.value)
+        where('fromDogId', '==', activeDogId.value)
       )
       const s2 = await getDocs(q2)
       likeDocIds = s2.docs.filter(d => d.data().toDogId === m.id).map(d => d.id)
     }
 
-    // Delete any likes we found (breaks the match)
+    // Delete our like(s) to break the match
     for (const id of likeDocIds) {
       await deleteDoc(doc(db, 'likes', id))
     }
@@ -432,18 +486,17 @@ async function confirmUnmatch() {
     // Let them reappear in Discover for THIS active dog
     undismissFromDiscover(m.id)
 
-    // ✅ close the popup now
+    // close the popup now
     confirmBusy.value = false
-    closeConfirm(true) // force close even if something still marked busy
+    closeConfirm(true)
   } catch (e) {
     console.error('Failed to unmatch:', e)
     alert('Sorry, failed to unmatch. Please try again.')
-    confirmBusy.value = false // re-enable buttons so user can retry
+    confirmBusy.value = false
   } finally {
     busyIds.value.delete(m.id)
   }
 }
-
 
 function timeAgo(ts) {
   const diff = Date.now() - Number(ts)
@@ -456,21 +509,29 @@ function timeAgo(ts) {
   return `${days}d ago`
 }
 
+/* === Auth + init === */
 let unsubscribeAuth = null
 function ensureSignedIn() {
   if (unsubscribeAuth) {
     unsubscribeAuth()
     unsubscribeAuth = null
   }
-  unsubscribeAuth = onAuthStateChanged(auth, user => {
+  unsubscribeAuth = onAuthStateChanged(auth, async user => {
     if (!user) {
       router.replace('/')
       return
     }
     currentUser.value = user
-    loadMatches(user)
+    await fetchMyDogs(user.uid)
+    await loadMatchesForActiveDog()
   })
 }
+
+/* Reload matches when switching active dog */
+watch(activeDogId, async (newId, oldId) => {
+  if (!newId || newId === oldId) return
+  await loadMatchesForActiveDog()
+})
 
 onMounted(() => {
   ensureSignedIn()
@@ -488,18 +549,54 @@ onBeforeUnmount(() => {
   min-height: 100vh;
   background: #f8f9fa;
 }
+
+/* Header now uses a 3-column grid: left | center | right, so the center stays truly centered */
 .matches-header {
   background: #6A2C4A;
   color: #fff;
   padding: 1rem 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+.left-spacer h1 { margin: 0; font-size: 1.4rem; }
+
+/* Centered group (label + selector) */
+.center-group {
+  justify-self: center;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: .5rem;
+  flex-wrap: wrap;
 }
+.center-text {
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+/* Right actions (your original Discover button) */
 .header-actions {
+  justify-self: end;
   display: flex;
   gap: .5rem;
+  align-items: center;
 }
+
+/* Active dog selector (kept from your styles) */
+.active-dog-select { display: flex; align-items: center; }
+.dog-select {
+  appearance: none;
+  background: white;
+  color: #6A2C4A;
+  border: none;
+  border-radius: 999px;
+  padding: .45rem .9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
 .btn {
   background: #fff;
   color: #6A2C4A;
@@ -530,12 +627,14 @@ onBeforeUnmount(() => {
   color: #6A2C4A;
   border-color: #6A2C4A;
 }
+
 .empty-state {
   text-align: center;
   padding: 3rem 1rem;
   color: #666;
 }
 .empty-state .emoji { font-size: 3rem; margin-bottom: .5rem; }
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -575,6 +674,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .remove-btn:disabled { opacity: .6; cursor: not-allowed; }
+
 .info {
   padding: .9rem;
   display: grid;
@@ -654,7 +754,7 @@ onBeforeUnmount(() => {
   position: relative; z-index: 1;
   width: min(92vw, 380px);
   background: #fff; border-radius: 16px; padding: 1rem 1.1rem 1.1rem;
-  box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
 }
 .confirm-card h3 { margin: 0 0 .4rem 0; color: #6A2C4A; }
 .confirm-card p { margin: 0 0 .9rem 0; color: #333; }
