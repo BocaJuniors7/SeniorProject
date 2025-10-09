@@ -21,7 +21,6 @@
 
       <!-- Right: your original Discover button -->
       <div class="header-actions">
-        <button class="btn" @click="goDiscover">Discover</button>
       </div>
     </header>
 
